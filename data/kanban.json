@@ -1,0 +1,101 @@
+{
+  "columns": [
+    {
+      "id": "todo",
+      "title": "To Do",
+      "cards": [
+        {
+          "id": "demo-task-1",
+          "title": "Build TS for stack members",
+          "description": "",
+          "color": "#1f77b4",
+          "project": "Nimbus Labs",
+          "links": []
+        }
+      ],
+      "color": "#1f77b4"
+    },
+    {
+      "id": "inprogress",
+      "title": "In Progress",
+      "cards": [
+        {
+          "id": "demo-task-2",
+          "title": "Build new Netscan For Stack Members",
+          "description": "",
+          "color": "#1f77b4",
+          "project": "Nimbus Labs",
+          "links": []
+        },
+        {
+          "id": "demo-task-5",
+          "title": "Security Documentation",
+          "description": "",
+          "color": "#a02c96",
+          "project": "Orchid Logic",
+          "links": []
+        }
+      ],
+      "color": "#ff8c00"
+    },
+    {
+      "id": "blocked",
+      "title": "Blocked",
+      "cards": [
+        {
+          "id": "demo-task-3",
+          "title": "Custom datasources",
+          "description": "Meet next week to go over API findings. These might be convertible into custom DataSources",
+          "color": "#20926c",
+          "project": "Helios Ventures",
+          "links": []
+        }
+      ],
+      "color": "#d62728"
+    },
+    {
+      "id": "others-working",
+      "title": "Others Working",
+      "cards": [
+        {
+          "id": "demo-task-4",
+          "title": "Get IdP Metadata XML",
+          "description": "",
+          "color": "#40067f",
+          "project": "Sable & Finch",
+          "links": [
+            {
+              "text": "Request ticket",
+              "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+            }
+          ]
+        }
+      ],
+      "color": "#20926c"
+    },
+    {
+      "id": "done",
+      "title": "Done",
+      "cards": [],
+      "color": "#2ca02c"
+    }
+  ],
+  "projects": [
+    {
+      "name": "Nimbus Labs",
+      "color": "#1f77b4"
+    },
+    {
+      "name": "Orchid Logic",
+      "color": "#a02c96"
+    },
+    {
+      "name": "Sable & Finch",
+      "color": "#40067f"
+    },
+    {
+      "name": "Helios Ventures",
+      "color": "#20926c"
+    }
+  ]
+}

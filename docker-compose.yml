@@ -1,0 +1,18 @@
+services:
+  perkan:
+    build: .
+    ports:
+      - "5000:5000"
+    command: ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--threads", "4", "--timeout", "60", "app:app"]
+    volumes:
+      - ./data/kanban.json:/app/data/kanban.json # share kanban.json directly with host
+    environment:
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5000/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
