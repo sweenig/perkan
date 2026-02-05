@@ -112,6 +112,7 @@ def _ensure_data_file():
     if not os.path.exists(DATA_DIR):
         os.makedirs(DATA_DIR)
     if not os.path.exists(DATA_FILE):
+        logger.info("Creating new blank kanban board at %s", DATA_FILE)
         _save_data(DEFAULT_BOARD)
 
 
@@ -148,6 +149,8 @@ def _save_data(data):
         if elapsed > 0.5:
             logger.warning('Slow _save_data: %.3fs', elapsed)
 
+# Ensure the data file exists as soon as the app module loads
+_ensure_data_file()
 
 def _clean_links(raw_links):
     """Return a list of {'text','url'} objects with minimal validation."""
