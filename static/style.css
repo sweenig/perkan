@@ -36,6 +36,16 @@ header h1{margin:0}
 .delete-btn{background-color:#d62728;color:#fff;border:0;padding:6px 12px;border-radius:4px;cursor:pointer}
 .delete-btn:hover{background-color:#b71c1c}
 
+.project-picker{position:relative;display:flex;align-items:center;gap:6px;margin-top:4px;width:100%}
+.project-picker input{flex:1}
+.project-picker-toggle{border:1px solid #563baf;background:#1b1033;color:#fff;padding:7px 10px;border-radius:6px;cursor:pointer;font-size:14px;line-height:1}
+.project-picker-toggle:hover{background:#24154b}
+.project-picker-dropdown{position:absolute;top:calc(100% + 4px);left:0;right:0;background:#131320;border:1px solid #563baf;border-radius:6px;max-height:220px;overflow:auto;z-index:15;box-shadow:0 10px 24px rgba(0,0,0,0.45)}
+.project-picker-dropdown.hidden{display:none}
+.project-option{display:block;width:100%;text-align:left;border:0;background:transparent;color:#f4f6f8;padding:8px 12px;cursor:pointer;font-size:14px}
+.project-option:hover,.project-option.match{background:rgba(183,142,245,0.18)}
+.project-option.empty{color:rgba(255,255,255,0.6);cursor:default}
+
 /* Settings modal */
 #settingsBtn{margin-left:8px;padding:6px 10px}
 .modal{position:fixed;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center}

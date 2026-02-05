@@ -75,7 +75,6 @@
           <button class="edit" title="Edit card">✏️</button>
         `;
 
-        // card color (if present) or default dark purple for newly created cards
         const cardColor = projectColor || card.color || '#5b2e8a';
         el.style.borderColor = cardColor;
         el.style.borderWidth = '2px';
@@ -369,38 +368,190 @@
         refreshProjectInputs();
       }
 
+      const projectPickerRegistry = new Map();
+      let projectPickerDocListenerAttached = false;
+
       function getProjectNames(){
-        if(!latestBoard || !Array.isArray(latestBoard.projects)) return [];
-        return latestBoard.projects
-          .filter(proj => proj && proj.name)
-          .map(proj => proj.name);
+        if(!latestBoard) return [];
+        const seen = new Set();
+        const names = [];
+        if(Array.isArray(latestBoard.projects)){
+          latestBoard.projects.forEach(proj => {
+            const name = proj && proj.name ? proj.name.trim() : '';
+            if(name && !seen.has(name)){
+              seen.add(name);
+              names.push(name);
+            }
+          });
+        }
+        if(Array.isArray(latestBoard.columns)){
+          latestBoard.columns.forEach(col => {
+            if(!Array.isArray(col.cards)) return;
+            col.cards.forEach(card => {
+              const projectName = card && card.project ? card.project.trim() : '';
+              if(projectName && !seen.has(projectName)){
+                seen.add(projectName);
+                names.push(projectName);
+              }
+            });
+          });
+        }
+        return names;
       }
 
-      function populateProjectInput(inputEl, datalistEl, selectedValue){
-        if(!inputEl || !datalistEl) return;
+      function populateProjectInput(inputEl, selectedValue){
+        if(!inputEl) return;
+        inputEl.value = selectedValue || '';
+        const state = projectPickerRegistry.get(inputEl.id);
+        if(state){
+          buildProjectPickerMenu(state);
+        }
+      }
+
+      function buildProjectPickerMenu(state){
+        if(!state) return;
         const names = getProjectNames();
-        datalistEl.innerHTML = '';
-        names.forEach(name => {
-          const opt = document.createElement('option');
-          opt.value = name;
-          datalistEl.appendChild(opt);
+        const filter = (state.input.value || '').trim().toLowerCase();
+        const ordered = [];
+        if(filter){
+          const matches = [];
+          const remainder = [];
+          names.forEach(name => {
+            const match = name.toLowerCase().includes(filter);
+            (match ? matches : remainder).push({name, match});
+          });
+          ordered.push(...matches, ...remainder);
+        } else {
+          names.forEach(name => ordered.push({name, match:false}));
+        }
+        state.menu.innerHTML = '';
+        if(!ordered.length){
+          const empty = document.createElement('div');
+          empty.className = 'project-option empty';
+          empty.textContent = 'No saved projects yet';
+          state.menu.appendChild(empty);
+          return;
+        }
+        ordered.forEach(item => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'project-option' + (item.match ? ' match' : '');
+          btn.textContent = item.name;
+          btn.addEventListener('click', () => {
+            state.input.value = item.name;
+            state.input.dispatchEvent(new Event('input', {bubbles:true}));
+            closeProjectPicker(state);
+            state.skipNextFocusOpen = true;
+            setTimeout(() => state.input.focus(), 0);
+          });
+          state.menu.appendChild(btn);
         });
-        if(typeof selectedValue === 'string'){
-          inputEl.value = selectedValue;
+      }
+
+      function openProjectPicker(state){
+        if(!state) return;
+        buildProjectPickerMenu(state);
+        state.menu.classList.remove('hidden');
+        state.toggle.setAttribute('aria-expanded', 'true');
+        state.open = true;
+      }
+
+      function closeProjectPicker(state){
+        if(!state) return;
+        state.menu.classList.add('hidden');
+        state.toggle.setAttribute('aria-expanded', 'false');
+        state.open = false;
+        state.suppressBlur = false;
+      }
+
+      function registerProjectPicker(inputId){
+        if(projectPickerRegistry.has(inputId)) return projectPickerRegistry.get(inputId);
+        const wrapper = document.querySelector(`.project-picker[data-project-input="${inputId}"]`);
+        const input = document.getElementById(inputId);
+        if(!wrapper || !input) return null;
+        const menu = wrapper.querySelector(`[data-project-menu="${inputId}"]`);
+        const toggle = wrapper.querySelector(`[data-project-toggle="${inputId}"]`);
+        if(!menu || !toggle) return null;
+        const state = {input, menu, toggle, wrapper, open:false, suppressBlur:false, skipNextFocusOpen:false};
+        projectPickerRegistry.set(inputId, state);
+
+        input.addEventListener('focus', () => {
+          if(state.skipNextFocusOpen){
+            state.skipNextFocusOpen = false;
+            return;
+          }
+          openProjectPicker(state);
+        });
+        input.addEventListener('input', () => {
+          buildProjectPickerMenu(state);
+          if(!state.open){
+            openProjectPicker(state);
+          }
+        });
+        input.addEventListener('keydown', (e) => {
+          if(e.key === 'ArrowDown'){
+            e.preventDefault();
+            openProjectPicker(state);
+            focusFirstProjectOption(state);
+          } else if(e.key === 'Escape'){
+            closeProjectPicker(state);
+          }
+        });
+        input.addEventListener('blur', () => {
+          if(state.suppressBlur) return;
+          setTimeout(() => {
+            if(!state.suppressBlur){
+              closeProjectPicker(state);
+            }
+          }, 120);
+        });
+
+        toggle.addEventListener('click', (e) => {
+          e.preventDefault();
+          if(state.open){
+            closeProjectPicker(state);
+          } else {
+            openProjectPicker(state);
+            input.focus();
+          }
+        });
+
+        menu.addEventListener('mousedown', (e) => {
+          state.suppressBlur = true;
+          e.stopPropagation();
+        });
+        menu.addEventListener('mouseup', (e) => {
+          e.stopPropagation();
+          setTimeout(() => {
+            state.suppressBlur = false;
+            input.focus();
+          }, 0);
+        });
+
+        if(!projectPickerDocListenerAttached){
+          document.addEventListener('mousedown', (evt) => {
+            projectPickerRegistry.forEach(pickerState => {
+              if(pickerState.open && !pickerState.wrapper.contains(evt.target)){
+                closeProjectPicker(pickerState);
+              }
+            });
+          });
+          projectPickerDocListenerAttached = true;
+        }
+
+        return state;
+      }
+
+      function focusFirstProjectOption(state){
+        if(!state || !state.menu) return;
+        const firstBtn = state.menu.querySelector('button.project-option');
+        if(firstBtn){
+          firstBtn.focus();
         }
       }
 
       function refreshProjectInputs(){
-        const createInput = document.getElementById('cardProjectInput');
-        const createList = document.getElementById('projectOptions');
-        if(createInput && createList){
-          populateProjectInput(createInput, createList, createInput.value);
-        }
-        const editInput = document.getElementById('editCardProject');
-        const editList = document.getElementById('projectOptionsEdit');
-        if(editInput && editList){
-          populateProjectInput(editInput, editList, editInput.value);
-        }
+        projectPickerRegistry.forEach(state => buildProjectPickerMenu(state));
       }
 
       function activateSettingsTab(tabId){
@@ -419,7 +570,7 @@
         }
       }
 
-      settingsModal.querySelectorAll('.settings-tab-btn').forEach(btn => {
+      document.querySelectorAll('.settings-tab-btn').forEach(btn => {
         btn.addEventListener('click', () => {
           activateSettingsTab(btn.dataset.tab);
         });
@@ -503,8 +654,11 @@
             <label>Title:</label>
             <input id="editCardTitle" placeholder="Card title" />
             <label>Project:</label>
-            <input id="editCardProject" list="projectOptionsEdit" placeholder="Select or type a project" />
-            <datalist id="projectOptionsEdit"></datalist>
+            <div class="project-picker" data-project-input="editCardProject">
+              <input id="editCardProject" class="modal-input project-input" placeholder="Select or type a project" autocomplete="off" />
+              <button type="button" class="project-picker-toggle" data-project-toggle="editCardProject" aria-label="Show saved projects">▼</button>
+              <div class="project-picker-dropdown hidden" data-project-menu="editCardProject"></div>
+            </div>
             <label>Description:</label>
             <textarea id="editCardDesc" placeholder="Description (optional)"></textarea>
             <div class="links-section">
@@ -520,6 +674,7 @@
         </div>
       `;
       document.body.appendChild(cardEditModal);
+      registerProjectPicker('editCardProject');
 
       function createLinkRowElement(link){
         const row = document.createElement('div');
@@ -597,8 +752,7 @@
         document.getElementById('editCardTitle').value = card.title || '';
         document.getElementById('editCardDesc').value = card.description || '';
         const editProjectInput = document.getElementById('editCardProject');
-        const editProjectList = document.getElementById('projectOptionsEdit');
-        populateProjectInput(editProjectInput, editProjectList, card.project || '');
+        populateProjectInput(editProjectInput, card.project || '');
         renderLinkRows(card.links || []);
 
         // apply purple styling to modal
@@ -657,8 +811,11 @@
           <div class="card-form">
             <label>Status: <select id="cardColumnSelect" class="modal-input"></select></label>
             <label>Project:</label>
-            <input id="cardProjectInput" list="projectOptions" class="modal-input" placeholder="Select or type a project" />
-            <datalist id="projectOptions"></datalist>
+            <div class="project-picker" data-project-input="cardProjectInput">
+              <input id="cardProjectInput" class="modal-input project-input" placeholder="Select or type a project" autocomplete="off" />
+              <button type="button" class="project-picker-toggle" data-project-toggle="cardProjectInput" aria-label="Show saved projects">▼</button>
+              <div class="project-picker-dropdown hidden" data-project-menu="cardProjectInput"></div>
+            </div>
             <input id="cardTitle" placeholder="Card title" />
             <textarea id="cardDesc" placeholder="Description (optional)"></textarea>
             <div class="modal-actions"><button id="cardAddBtn">Add</button> <button id="cardCancelBtn">Cancel</button></div>
@@ -666,6 +823,7 @@
         </div>
       `;
       document.body.appendChild(cardModal);
+      registerProjectPicker('cardProjectInput');
 
       async function openCardModal(columnId){
         const modal = document.getElementById('cardModal');
@@ -681,8 +839,7 @@
         });
         sel.value = columnId;
         const createProjectInput = document.getElementById('cardProjectInput');
-        const createProjectList = document.getElementById('projectOptions');
-        populateProjectInput(createProjectInput, createProjectList, '');
+        populateProjectInput(createProjectInput, '');
 
         const modalContent = modal.querySelector('.modal-content');
         const modalPurple = '#b78ef5';
