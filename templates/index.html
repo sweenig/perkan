@@ -173,6 +173,8 @@
 
           boardEl.appendChild(colEl);
         }
+
+        refreshProjectInputs();
       }
 
       // Global add removed: use per-column + buttons to add cards.
@@ -284,6 +286,8 @@
             renderStatusSettings();
           });
         });
+
+        refreshProjectInputs();
       }
 
       async function renderProjectSettings(){
@@ -361,28 +365,41 @@
             await renderProjectSettings();
           });
         });
+
+        refreshProjectInputs();
       }
 
-      function populateProjectSelect(selectEl, selectedValue){
-        if(!selectEl) return;
-        const projects = latestBoard && Array.isArray(latestBoard.projects) ? latestBoard.projects : [];
-        selectEl.innerHTML = '';
-        const noneOption = document.createElement('option');
-        noneOption.value = '';
-        noneOption.textContent = 'No project';
-        selectEl.appendChild(noneOption);
-        projects.forEach(proj => {
-          if(!proj || !proj.name) return;
+      function getProjectNames(){
+        if(!latestBoard || !Array.isArray(latestBoard.projects)) return [];
+        return latestBoard.projects
+          .filter(proj => proj && proj.name)
+          .map(proj => proj.name);
+      }
+
+      function populateProjectInput(inputEl, datalistEl, selectedValue){
+        if(!inputEl || !datalistEl) return;
+        const names = getProjectNames();
+        datalistEl.innerHTML = '';
+        names.forEach(name => {
           const opt = document.createElement('option');
-          opt.value = proj.name;
-          opt.textContent = proj.name;
-          selectEl.appendChild(opt);
+          opt.value = name;
+          datalistEl.appendChild(opt);
         });
-        const targetValue = selectedValue || '';
-        if([...selectEl.options].some(opt => opt.value === targetValue)){
-          selectEl.value = targetValue;
-        } else {
-          selectEl.value = '';
+        if(typeof selectedValue === 'string'){
+          inputEl.value = selectedValue;
+        }
+      }
+
+      function refreshProjectInputs(){
+        const createInput = document.getElementById('cardProjectInput');
+        const createList = document.getElementById('projectOptions');
+        if(createInput && createList){
+          populateProjectInput(createInput, createList, createInput.value);
+        }
+        const editInput = document.getElementById('editCardProject');
+        const editList = document.getElementById('projectOptionsEdit');
+        if(editInput && editList){
+          populateProjectInput(editInput, editList, editInput.value);
         }
       }
 
@@ -486,7 +503,8 @@
             <label>Title:</label>
             <input id="editCardTitle" placeholder="Card title" />
             <label>Project:</label>
-            <select id="editCardProject"></select>
+            <input id="editCardProject" list="projectOptionsEdit" placeholder="Select or type a project" />
+            <datalist id="projectOptionsEdit"></datalist>
             <label>Description:</label>
             <textarea id="editCardDesc" placeholder="Description (optional)"></textarea>
             <div class="links-section">
@@ -578,7 +596,9 @@
         modal.dataset.cardId = card.id;
         document.getElementById('editCardTitle').value = card.title || '';
         document.getElementById('editCardDesc').value = card.description || '';
-        populateProjectSelect(document.getElementById('editCardProject'), card.project || '');
+        const editProjectInput = document.getElementById('editCardProject');
+        const editProjectList = document.getElementById('projectOptionsEdit');
+        populateProjectInput(editProjectInput, editProjectList, card.project || '');
         renderLinkRows(card.links || []);
 
         // apply purple styling to modal
@@ -636,7 +656,9 @@
           <h2>New Task</h2>
           <div class="card-form">
             <label>Status: <select id="cardColumnSelect" class="modal-input"></select></label>
-            <label>Project: <select id="cardProjectSelect" class="modal-input"></select></label>
+            <label>Project:</label>
+            <input id="cardProjectInput" list="projectOptions" class="modal-input" placeholder="Select or type a project" />
+            <datalist id="projectOptions"></datalist>
             <input id="cardTitle" placeholder="Card title" />
             <textarea id="cardDesc" placeholder="Description (optional)"></textarea>
             <div class="modal-actions"><button id="cardAddBtn">Add</button> <button id="cardCancelBtn">Cancel</button></div>
@@ -658,7 +680,9 @@
           sel.appendChild(opt);
         });
         sel.value = columnId;
-        populateProjectSelect(document.getElementById('cardProjectSelect'), '');
+        const createProjectInput = document.getElementById('cardProjectInput');
+        const createProjectList = document.getElementById('projectOptions');
+        populateProjectInput(createProjectInput, createProjectList, '');
 
         const modalContent = modal.querySelector('.modal-content');
         const modalPurple = '#b78ef5';
@@ -690,7 +714,7 @@
         const column = document.getElementById('cardColumnSelect').value || modal.dataset.column;
         const title = document.getElementById('cardTitle').value.trim();
         const description = document.getElementById('cardDesc').value.trim();
-        const project = document.getElementById('cardProjectSelect').value;
+        const project = document.getElementById('cardProjectInput').value;
         if(!title) return alert('title required');
         await fetch('/api/card', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title, description, column, project})});
         closeCardModal();

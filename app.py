@@ -8,6 +8,7 @@ import time
 import logging
 import errno
 import shutil
+import random
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 # Basic logging for debugging slow I/O
@@ -45,6 +46,31 @@ def _get_projects(board):
         projects = []
         board['projects'] = projects
     return projects
+
+
+def _generate_unique_color(board, attempts=32):
+    existing = { (proj.get('color') or '').lower() for proj in _get_projects(board) if proj.get('color') }
+    for _ in range(attempts):
+        color = f"#{random.randint(0, 0xFFFFFF):06x}"
+        if color.lower() not in existing:
+            return color
+    return f"#{random.randint(0, 0xFFFFFF):06x}"
+
+
+def _ensure_project(board, project_name):
+    project_name = (project_name or '').strip()
+    if not project_name:
+        return None
+    projects = _get_projects(board)
+    existing = next((p for p in projects if p.get('name') == project_name), None)
+    if existing:
+        if not existing.get('color'):
+            existing['color'] = DEFAULT_CARD_COLOR
+        return existing
+    color = _generate_unique_color(board)
+    project = {'name': project_name, 'color': color}
+    projects.append(project)
+    return project
 
 
 def _find_project(board, project_name):
@@ -170,11 +196,9 @@ def create_card():
     }
     project_details = None
     if project_name:
-        project_details = _find_project(board, project_name)
-        if not project_details:
-            return jsonify({'error': 'project not found'}), 400
+        project_details = _ensure_project(board, project_name)
         card['project'] = project_name
-        if project_details.get('color'):
+        if project_details and project_details.get('color'):
             card['color'] = project_details['color']
 
     if color and not project_details:
@@ -230,11 +254,9 @@ def update_card(card_id):
     if project_payload is not None:
         normalized_project = (project_payload or '').strip()
         if normalized_project:
-            project_details = _find_project(board, normalized_project)
-            if not project_details:
-                return jsonify({'error': 'project not found'}), 400
+            project_details = _ensure_project(board, normalized_project)
             card_obj['project'] = normalized_project
-            if project_details.get('color'):
+            if project_details and project_details.get('color'):
                 card_obj['color'] = project_details['color']
         else:
             card_obj.pop('project', None)
@@ -377,7 +399,7 @@ def get_projects():
 def create_project():
     data = request.get_json() or {}
     name = (data.get('name') or '').strip()
-    color = data.get('color') or DEFAULT_CARD_COLOR
+    color = data.get('color')
     position = data.get('position')
     if not name:
         return jsonify({'error': 'name required'}), 400
@@ -386,6 +408,8 @@ def create_project():
     projects = _get_projects(board)
     if any(proj.get('name') == name for proj in projects):
         return jsonify({'error': 'project name must be unique'}), 400
+    if not color:
+        color = _generate_unique_color(board)
     project = {'name': name, 'color': color}
 
     if position is None or position >= len(projects):
