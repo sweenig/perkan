@@ -23,21 +23,27 @@ DEFAULT_CARD_COLOR = '#5b2e8a'
 
 DEFAULT_BOARD = {
     "columns": [
-        {"id": "todo", "title": "To Do", "cards": [], "color": "#1f77b4"},
-        {"id": "inprogress", "title": "In Progress", "cards": [], "color": "#ff8c00"},
-        {"id": "blocked", "title": "Blocked", "cards": [], "color": "#d62728"},
-        {"id": "done", "title": "Done", "cards": [], "color": "#2ca02c"}
+    {"id": "todo", "title": "To Do", "cards": [], "color": "#1f77b4", "hidden": False},
+    {"id": "inprogress", "title": "In Progress", "cards": [], "color": "#ff8c00", "hidden": False},
+    {"id": "blocked", "title": "Blocked", "cards": [], "color": "#d62728", "hidden": False},
+    {"id": "done", "title": "Done", "cards": [], "color": "#2ca02c", "hidden": False}
     ],
     "projects": []
 }
 
 
 def _normalize_board(data):
-        if 'columns' not in data or not isinstance(data['columns'], list):
-                data['columns'] = []
-        if 'projects' not in data or not isinstance(data['projects'], list):
-                data['projects'] = []
-        return data
+    if 'columns' not in data or not isinstance(data['columns'], list):
+        data['columns'] = []
+    if 'projects' not in data or not isinstance(data['projects'], list):
+        data['projects'] = []
+    for col in data['columns']:
+        if not isinstance(col, dict):
+            continue
+        if 'cards' not in col or not isinstance(col['cards'], list):
+            col['cards'] = []
+        col['hidden'] = bool(col.get('hidden', False))
+    return data
 
 
 def _get_projects(board):
@@ -187,6 +193,7 @@ def create_card():
     description = data.get('description', '')
     column_id = data.get('column', 'todo')
     color = data.get('color')
+    hidden = data.get('hidden')
     project_name = (data.get('project') or '').strip()
     links = _clean_links(data.get('links'))
     if not title:
@@ -320,7 +327,7 @@ def delete_card(card_id):
 @app.route('/api/columns', methods=['GET'])
 def get_columns():
     board = _load_data()
-    cols = [{'id': c['id'], 'title': c['title'], 'color': c.get('color')} for c in board['columns']]
+    cols = [{'id': c['id'], 'title': c['title'], 'color': c.get('color'), 'hidden': bool(c.get('hidden', False))} for c in board['columns']]
     return jsonify({'columns': cols})
 
 
@@ -344,7 +351,8 @@ def create_column():
     if col_id in ids:
         col_id = f"{col_id}-{str(uuid.uuid4())[:8]}"
 
-    col = {'id': col_id, 'title': title, 'cards': [], 'color': color}
+    hidden = bool(data.get('hidden', False))
+    col = {'id': col_id, 'title': title, 'cards': [], 'color': color, 'hidden': hidden}
     if position is None or position >= len(board['columns']):
         board['columns'].append(col)
     else:
@@ -359,6 +367,7 @@ def update_column(col_id):
     title = data.get('title')
     position = data.get('position')
     color = data.get('color')
+    hidden = data.get('hidden')
     board = _load_data()
     idx = next((i for i, c in enumerate(board['columns']) if c['id'] == col_id), None)
     if idx is None:
@@ -368,6 +377,8 @@ def update_column(col_id):
         col['title'] = title
     if color is not None:
         col['color'] = color
+    if hidden is not None:
+        col['hidden'] = bool(hidden)
     if position is not None:
         pos = max(0, int(position))
         board['columns'].pop(idx)

@@ -124,6 +124,9 @@
         hideDropZones();
         boardEl.innerHTML = '';
         for(const col of board.columns){
+          if(col.hidden){
+            continue;
+          }
           const colEl = document.createElement('div');
           colEl.className = 'column';
           colEl.dataset.column = col.id;
@@ -224,6 +227,10 @@
           row.innerHTML = `
             <input class="col-title" data-id="${col.id}" value="${escapeHtml(col.title)}" />
             <input class="col-color" type="color" data-id="${col.id}" value="${col.color || '#9aa0a6'}" />
+            <label class="col-hide-toggle">
+              <input class="col-hidden" type="checkbox" data-id="${col.id}" ${col.hidden ? 'checked' : ''} />
+              Hide
+            </label>
             <button class="col-up" data-id="${col.id}" data-idx="${idx}" ${idx===0? 'disabled':''}>↑</button>
             <button class="col-down" data-id="${col.id}" data-idx="${idx}" ${idx===board.columns.length-1? 'disabled':''}>↓</button>
             <button class="col-delete" data-id="${col.id}">Delete</button>
@@ -247,6 +254,15 @@
             const id = e.target.dataset.id;
             const color = e.target.value;
             await fetch('/api/column/' + id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({color})});
+            render();
+            renderStatusSettings();
+          });
+        });
+        document.querySelectorAll('.col-hidden').forEach(inp=>{
+          inp.addEventListener('change', async (e)=>{
+            const id = e.target.dataset.id;
+            const hidden = e.target.checked;
+            await fetch('/api/column/' + id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({hidden})});
             render();
             renderStatusSettings();
           });
