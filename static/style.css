@@ -11,11 +11,18 @@ header h1{margin:0}
 .card{background:#fafafa;border:1px solid #ddd;padding:8px;border-radius:6px;margin-bottom:8px;cursor:grab;position:relative;min-height:60px}
 .card .card-title{font-weight:600}
 .card .card-desc{word-break:break-word;overflow-wrap:anywhere;padding-bottom:48px}
-.card .card-links{position:absolute;left:8px;bottom:6px;font-size:13px;color:#4b4b4b;display:flex;align-items:center;gap:4px;background:rgba(0,0,0,0.05);padding:2px 8px;border-radius:14px;font-weight:600}
+.card .card-links{position:absolute;left:8px;bottom:6px;font-size:13px;color:#4b4b4b;display:flex;align-items:center;gap:4px;background:rgba(0,0,0,0.05);padding:2px 8px;border-radius:14px;font-weight:600;cursor:pointer}
 .card .card-project{position:absolute;left:50%;bottom:6px;transform:translateX(-50%);font-size:13px;color:var(--project-pill-text,#1b1b25);background:var(--project-pill-bg,rgba(255,255,255,0.85));padding:2px 12px;border-radius:16px;font-weight:600;box-shadow:0 2px 6px rgba(0,0,0,0.12);white-space:nowrap;pointer-events:none;border:2px solid var(--project-pill-border,rgba(0,0,0,0.12));transition:background 0.2s ease,border-color 0.2s ease,color 0.2s ease}
 .drop-zone{margin-bottom:10px;padding:14px;border:2px dashed #b78ef5;border-radius:8px;text-align:center;font-weight:600;color:#b78ef5;background:rgba(183,142,245,0.08);pointer-events:none;opacity:0;transform:scale(0.95);transition:opacity 0.15s ease,transform 0.15s ease}
 .drop-zone.visible{opacity:1;transform:scale(1)}
 .card .edit{position:absolute;right:6px;bottom:6px;border:0;background:transparent;cursor:pointer;font-size:16px;padding:2px 4px}
+
+.card-link-popup{position:absolute;z-index:40;min-width:220px;background:#0f0f18;color:#f4f6f8;border:1px solid rgba(255,255,255,0.18);border-radius:8px;padding:10px;box-shadow:0 12px 28px rgba(0,0,0,0.5);font-size:13px;line-height:1.4}
+.card-link-popup.hidden{display:none}
+.card-link-popup ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.card-link-popup li{display:flex}
+.card-link-popup a{color:#8bb9ff;text-decoration:none;font-weight:600;word-break:break-word}
+.card-link-popup a:hover{text-decoration:underline}
 
 /* per-column add button */
 .col-add{position:absolute;right:8px;bottom:8px;width:34px;height:34px;border-radius:50%;border:0;background:#1f77b4;color:#fff;font-size:20px;line-height:1;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,0.2)}

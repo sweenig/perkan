@@ -58,6 +58,55 @@
         document.querySelectorAll('.drop-zone').forEach(zone => zone.remove());
       }
 
+      const linkPreview = document.createElement('div');
+      linkPreview.id = 'cardLinkPreview';
+      linkPreview.className = 'card-link-popup hidden';
+      document.body.appendChild(linkPreview);
+
+      let linkPreviewHideTimer = null;
+
+      function cancelLinkPreviewHide(){
+        if(linkPreviewHideTimer){
+          clearTimeout(linkPreviewHideTimer);
+          linkPreviewHideTimer = null;
+        }
+      }
+
+      function hideLinkPreviewImmediate(){
+        cancelLinkPreviewHide();
+        if(!linkPreview.classList.contains('hidden')){
+          linkPreview.classList.add('hidden');
+        }
+      }
+
+      function scheduleLinkPreviewHide(){
+        cancelLinkPreviewHide();
+        linkPreviewHideTimer = setTimeout(()=>{
+          linkPreview.classList.add('hidden');
+        }, 120);
+      }
+
+      function showLinkPreview(links, anchorEl){
+        if(!Array.isArray(links) || !links.length){
+          hideLinkPreviewImmediate();
+          return;
+        }
+        cancelLinkPreviewHide();
+        const items = links.map(link => {
+          const safeText = escapeHtml((link && (link.text || link.url)) || 'Link');
+          const safeUrl = escapeHtml((link && link.url) || '#');
+          return `<li><a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${safeText}</a></li>`;
+        }).join('');
+        linkPreview.innerHTML = `<ul>${items}</ul>`;
+        const rect = anchorEl.getBoundingClientRect();
+        linkPreview.style.top = `${window.scrollY + rect.bottom + 6}px`;
+        linkPreview.style.left = `${window.scrollX + rect.left}px`;
+        linkPreview.classList.remove('hidden');
+      }
+
+      linkPreview.addEventListener('mouseenter', cancelLinkPreviewHide);
+      linkPreview.addEventListener('mouseleave', scheduleLinkPreviewHide);
+
       function createCardElement(card, projectMap) {
         const linkCount = Array.isArray(card.links) ? card.links.length : 0;
         const projectName = card.project || '';
@@ -102,6 +151,16 @@
           ev.stopPropagation();
           await openCardEditModal(card);
         });
+
+        const linkBadge = el.querySelector('.card-links');
+        if(linkBadge){
+          linkBadge.addEventListener('mouseenter', () => {
+            showLinkPreview(card.links, linkBadge);
+          });
+          linkBadge.addEventListener('mouseleave', () => {
+            scheduleLinkPreviewHide();
+          });
+        }
         return el;
       }
 
@@ -122,6 +181,7 @@
         }
 
         hideDropZones();
+        hideLinkPreviewImmediate();
         boardEl.innerHTML = '';
         for(const col of board.columns){
           if(col.hidden){
