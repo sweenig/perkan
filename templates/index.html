@@ -107,6 +107,71 @@
       linkPreview.addEventListener('mouseenter', cancelLinkPreviewHide);
       linkPreview.addEventListener('mouseleave', scheduleLinkPreviewHide);
 
+      const projectPreview = document.createElement('div');
+      projectPreview.id = 'projectPreview';
+      projectPreview.className = 'project-info-popup hidden';
+      document.body.appendChild(projectPreview);
+
+      let projectPreviewHideTimer = null;
+
+      function cancelProjectPreviewHide(){
+        if(projectPreviewHideTimer){
+          clearTimeout(projectPreviewHideTimer);
+          projectPreviewHideTimer = null;
+        }
+      }
+
+      function hideProjectPreviewImmediate(){
+        cancelProjectPreviewHide();
+        if(!projectPreview.classList.contains('hidden')){
+          projectPreview.classList.add('hidden');
+        }
+      }
+
+      function scheduleProjectPreviewHide(){
+        cancelProjectPreviewHide();
+        projectPreviewHideTimer = setTimeout(()=>{
+          projectPreview.classList.add('hidden');
+        }, 120);
+      }
+
+      function showProjectPreview(projectDetails, anchorEl){
+        if(!projectDetails){
+          hideProjectPreviewImmediate();
+          return;
+        }
+        cancelProjectPreviewHide();
+        const rawName = projectDetails.name || '';
+        const projectName = escapeHtml(rawName || 'Untitled project');
+        const projectColor = escapeHtml(projectDetails.color || '#5b2e8a');
+        projectPreview.dataset.project = rawName;
+        projectPreview.innerHTML = `
+          <div class="project-preview-top">
+            <span class="project-preview-dot" style="background:${projectColor};"></span>
+            <div class="project-preview-text">
+              <div class="project-preview-name">${projectName}</div>
+              <div class="project-preview-color">${projectColor}</div>
+            </div>
+            <button type="button" class="project-preview-edit" title="Edit project">✏️</button>
+          </div>
+        `;
+        const rect = anchorEl.getBoundingClientRect();
+        projectPreview.style.top = `${window.scrollY + rect.bottom + 6}px`;
+        projectPreview.style.left = `${window.scrollX + rect.left}px`;
+        projectPreview.classList.remove('hidden');
+      }
+
+      projectPreview.addEventListener('mouseenter', cancelProjectPreviewHide);
+      projectPreview.addEventListener('mouseleave', scheduleProjectPreviewHide);
+      projectPreview.addEventListener('click', (e) => {
+        if(e.target.closest('.project-preview-edit')){
+          const projectName = projectPreview.dataset.project || '';
+          hideProjectPreviewImmediate();
+          openSettingsModal('projects');
+          focusProjectInSettings(projectName);
+        }
+      });
+
       function createCardElement(card, projectMap) {
         const linkCount = Array.isArray(card.links) ? card.links.length : 0;
         const projectName = card.project || '';
@@ -152,6 +217,17 @@
           await openCardEditModal(card);
         });
 
+        const projectBadge = el.querySelector('.card-project');
+        if(projectBadge && projectName){
+          projectBadge.addEventListener('mouseenter', () => {
+            const previewDetails = projectDetails || {name: projectName, color: projectColor || card.color || '#5b2e8a'};
+            showProjectPreview(previewDetails, projectBadge);
+          });
+          projectBadge.addEventListener('mouseleave', () => {
+            scheduleProjectPreviewHide();
+          });
+        }
+
         const linkBadge = el.querySelector('.card-links');
         if(linkBadge){
           linkBadge.addEventListener('mouseenter', () => {
@@ -182,6 +258,7 @@
 
         hideDropZones();
         hideLinkPreviewImmediate();
+        hideProjectPreviewImmediate();
         boardEl.innerHTML = '';
         for(const col of board.columns){
           if(col.hidden){
@@ -646,6 +723,56 @@
         }
       }
 
+      function openSettingsModal(tabId){
+        const modal = document.getElementById('settingsModal');
+        if(!modal) return;
+        const modalContent = modal.querySelector('.modal-content');
+        const modalPurple = '#b78ef5';
+        if(modal.classList.contains('hidden')){
+          modal.classList.remove('hidden');
+          if(modalContent){
+            modalContent.style.borderColor = modalPurple;
+            modalContent.style.borderWidth = '2px';
+            modalContent.style.backgroundColor = '#0f0f18';
+          }
+        }
+        activateSettingsTab(tabId || 'statuses');
+      }
+
+      function closeSettingsModal(){
+        const modal = document.getElementById('settingsModal');
+        if(!modal) return;
+        const modalContent = modal.querySelector('.modal-content');
+        if(modalContent){
+          modalContent.style.borderColor = '';
+          modalContent.style.borderWidth = '';
+          modalContent.style.backgroundColor = '';
+        }
+        modal.classList.add('hidden');
+      }
+
+      function focusProjectInSettings(projectName){
+        if(!projectName) return;
+        let attempts = 0;
+        const tryFocus = () => {
+          const list = document.getElementById('projectsList');
+          if(list){
+            const inputs = Array.from(list.querySelectorAll('.project-name'));
+            const target = inputs.find(inp => inp.value.trim() === projectName.trim());
+            if(target){
+              target.focus();
+              target.select();
+              return;
+            }
+          }
+          attempts += 1;
+          if(attempts < 5){
+            setTimeout(tryFocus, 120);
+          }
+        };
+        tryFocus();
+      }
+
       document.querySelectorAll('.settings-tab-btn').forEach(btn => {
         btn.addEventListener('click', () => {
           activateSettingsTab(btn.dataset.tab);
@@ -654,35 +781,14 @@
 
       document.getElementById('settingsBtn').addEventListener('click', ()=>{
         const modal = document.getElementById('settingsModal');
-        const wasHidden = modal.classList.contains('hidden');
-        modal.classList.toggle('hidden');
-        if(wasHidden){
-          const modalContent = modal.querySelector('.modal-content');
-          const modalPurple = '#b78ef5';
-          if(modalContent){
-            modalContent.style.borderColor = modalPurple;
-            modalContent.style.borderWidth = '2px';
-            modalContent.style.backgroundColor = '#0f0f18';
-          }
-          activateSettingsTab('statuses');
+        if(modal.classList.contains('hidden')){
+          openSettingsModal('statuses');
         } else {
-          const modalContent = modal.querySelector('.modal-content');
-          if(modalContent){
-            modalContent.style.borderColor = '';
-            modalContent.style.borderWidth = '';
-            modalContent.style.backgroundColor = '';
-          }
+          closeSettingsModal();
         }
       });
       document.getElementById('closeSettings').addEventListener('click', ()=>{
-        const modal = document.getElementById('settingsModal');
-        const modalContent = modal.querySelector('.modal-content');
-        if(modalContent){
-          modalContent.style.borderColor = '';
-          modalContent.style.borderWidth = '';
-          modalContent.style.backgroundColor = '';
-        }
-        modal.classList.add('hidden');
+        closeSettingsModal();
       });
       document.getElementById('addColumnBtn').addEventListener('click', async ()=>{
         const title = document.getElementById('newColumnTitle').value.trim();
@@ -709,7 +815,7 @@
       // close modal when clicking backdrop
       document.addEventListener('click', (e)=>{
         const modal = document.getElementById('settingsModal');
-        if(e.target.classList.contains('modal-backdrop')) modal.classList.add('hidden');
+        if(modal && e.target.classList.contains('modal-backdrop') && modal.contains(e.target)) closeSettingsModal();
         // card modal backdrop
         const cardModal = document.getElementById('cardModal');
         if(cardModal && e.target.classList.contains('modal-backdrop')) cardModal.classList.add('hidden');
