@@ -330,6 +330,7 @@
           <div class="settings-tabs" role="tablist">
             <button type="button" class="settings-tab-btn active" data-tab="statuses">Statuses</button>
             <button type="button" class="settings-tab-btn" data-tab="projects">Projects</button>
+            <button type="button" class="settings-tab-btn" data-tab="import">Import/Export</button>
           </div>
           <div class="settings-tab-panels">
             <div class="settings-tab-panel active" data-tab="statuses">
@@ -346,6 +347,27 @@
                 <input id="newProjectName" placeholder="New project name" />
                 <input id="newProjectColor" type="color" value="#5b2e8a" />
                 <button id="addProjectBtn">Add Project</button>
+              </div>
+            </div>
+            <div class="settings-tab-panel" data-tab="import">
+              <div class="import-export-panel">
+                <section class="import-block">
+                  <h3>Export Board</h3>
+                  <p>Download the current kanban.json file for safekeeping or migration.</p>
+                  <button type="button" id="downloadBoardBtn">Download kanban.json</button>
+                </section>
+                <section class="import-block">
+                  <h3>Import Board</h3>
+                  <p>Select a saved kanban.json file and choose whether to merge or replace your current board.</p>
+                  <input type="file" id="importFileInput" accept="application/json" />
+                  <div class="import-mode">
+                    <label><input type="radio" name="importMode" value="merge" checked /> Merge with existing data</label>
+                    <label><input type="radio" name="importMode" value="replace" /> Replace existing data</label>
+                  </div>
+                  <div class="import-actions">
+                    <button type="button" id="importBoardBtn">Import kanban.json</button>
+                  </div>
+                </section>
               </div>
             </div>
           </div>
@@ -707,6 +729,69 @@
         projectPickerRegistry.forEach(state => buildProjectPickerMenu(state));
       }
 
+      async function downloadBoardJson(){
+        try {
+          const res = await fetch('/api/board/export');
+          if(!res.ok){
+            throw new Error('Failed to download board');
+          }
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = 'kanban.json';
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          setTimeout(()=>URL.revokeObjectURL(url), 0);
+        } catch(err){
+          console.error(err);
+          alert('Unable to download the board data.');
+        }
+      }
+
+      async function importBoardJson(){
+        const fileInput = document.getElementById('importFileInput');
+        if(!fileInput || !fileInput.files || !fileInput.files.length){
+          alert('Select a kanban.json file to import.');
+          return;
+        }
+        const modeInput = document.querySelector('input[name="importMode"]:checked');
+        const mode = modeInput ? modeInput.value : 'merge';
+        const confirmMsg = mode === 'replace'
+          ? 'Replace the current board with the selected file? This cannot be undone.'
+          : 'Merge the selected board into your current data?';
+        if(!confirm(confirmMsg)){
+          return;
+        }
+        const formData = new FormData();
+        formData.append('file', fileInput.files[0]);
+        formData.append('mode', mode);
+        try {
+          const res = await fetch('/api/board/import', {method:'POST', body: formData});
+          const payload = await res.json().catch(()=>({}));
+          if(!res.ok){
+            const message = payload && payload.error ? payload.error : 'Import failed';
+            alert(message);
+            return;
+          }
+          fileInput.value = '';
+          await render();
+          const activeTabBtn = document.querySelector('.settings-tab-btn.active');
+          if(activeTabBtn){
+            if(activeTabBtn.dataset.tab === 'projects'){
+              await renderProjectSettings();
+            } else if(activeTabBtn.dataset.tab === 'statuses'){
+              await renderStatusSettings();
+            }
+          }
+          alert('Import complete.');
+        } catch(err){
+          console.error(err);
+          alert('Unable to import the selected file.');
+        }
+      }
+
       function activateSettingsTab(tabId){
         const modal = document.getElementById('settingsModal');
         if(!modal) return;
@@ -810,6 +895,13 @@
         document.getElementById('newProjectColor').value = '#5b2e8a';
         await render();
         await renderProjectSettings();
+      });
+
+      document.getElementById('downloadBoardBtn').addEventListener('click', ()=>{
+        downloadBoardJson();
+      });
+      document.getElementById('importBoardBtn').addEventListener('click', ()=>{
+        importBoardJson();
       });
 
       // close modal when clicking backdrop

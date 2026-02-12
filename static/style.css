@@ -105,3 +105,12 @@ header h1{margin:0}
 .project-empty{padding:12px;border:1px dashed rgba(255,255,255,0.3);border-radius:6px;text-align:center;color:rgba(255,255,255,0.6)}
 .add-project{display:flex;gap:8px;margin-top:10px}
 .modal-actions{display:flex;justify-content:flex-end;margin-top:12px}
+.import-export-panel{display:flex;flex-direction:column;gap:16px;margin-top:10px}
+.import-block{background:#131320;border:1px solid rgba(183,142,245,0.35);border-radius:10px;padding:14px}
+.import-block h3{margin:0 0 6px;font-size:16px}
+.import-block p{margin:0 0 12px;color:rgba(255,255,255,0.7);font-size:13px}
+#downloadBoardBtn,#importBoardBtn{background:#563baf;color:#fff;border:1px solid #7d61e3;padding:8px 14px;border-radius:6px;cursor:pointer;font-weight:600}
+#downloadBoardBtn:hover,#importBoardBtn:hover{background:#6b4fe3}
+#importFileInput{width:100%;padding:8px;border-radius:6px;border:1px solid #563baf;background:#1b1b25;color:#f4f6f8;box-sizing:border-box}
+.import-mode{display:flex;flex-direction:column;gap:6px;font-size:13px;color:rgba(255,255,255,0.85);margin-top:10px}
+.import-actions{margin-top:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}

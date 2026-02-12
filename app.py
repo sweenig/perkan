@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request, render_template, abort
+from flask import Flask, jsonify, request, render_template, abort, send_file
 import json
 import os
 import threading
@@ -9,6 +9,7 @@ import logging
 import errno
 import shutil
 import random
+import copy
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 # Basic logging for debugging slow I/O
@@ -32,17 +33,64 @@ DEFAULT_BOARD = {
 }
 
 
+def _sanitize_card(card):
+    if not isinstance(card, dict):
+        return None
+    sanitized = {}
+    sanitized['id'] = str(card.get('id') or uuid.uuid4())
+    sanitized['title'] = str(card.get('title') or '').strip() or 'Untitled'
+    sanitized['description'] = str(card.get('description') or '')
+    sanitized['links'] = _clean_links(card.get('links'))
+    project_name = (card.get('project') or '').strip()
+    if project_name:
+        sanitized['project'] = project_name
+    color = card.get('color')
+    sanitized['color'] = color if color else DEFAULT_CARD_COLOR
+    return sanitized
+
+
 def _normalize_board(data):
+    if not isinstance(data, dict):
+        data = {}
     if 'columns' not in data or not isinstance(data['columns'], list):
         data['columns'] = []
     if 'projects' not in data or not isinstance(data['projects'], list):
         data['projects'] = []
+
+    normalized_columns = []
     for col in data['columns']:
         if not isinstance(col, dict):
             continue
-        if 'cards' not in col or not isinstance(col['cards'], list):
-            col['cards'] = []
-        col['hidden'] = bool(col.get('hidden', False))
+        col_id = col.get('id') or str(uuid.uuid4())
+        title = str(col.get('title') or '').strip() or 'Untitled'
+        color = col.get('color') or '#9aa0a6'
+        hidden = bool(col.get('hidden', False))
+        cards_payload = col.get('cards') if isinstance(col.get('cards'), list) else []
+        normalized_cards = []
+        seen_ids = set()
+        for card in cards_payload:
+            sanitized = _sanitize_card(card)
+            if not sanitized:
+                continue
+            if sanitized['id'] in seen_ids:
+                sanitized['id'] = str(uuid.uuid4())
+            seen_ids.add(sanitized['id'])
+            normalized_cards.append(sanitized)
+        normalized_columns.append({'id': col_id, 'title': title, 'color': color, 'hidden': hidden, 'cards': normalized_cards})
+
+    normalized_projects = []
+    seen_projects = set()
+    for proj in data['projects']:
+        if not isinstance(proj, dict):
+            continue
+        name = (proj.get('name') or '').strip()
+        if not name or name in seen_projects:
+            continue
+        normalized_projects.append({'name': name, 'color': proj.get('color') or DEFAULT_CARD_COLOR})
+        seen_projects.add(name)
+
+    data['columns'] = normalized_columns
+    data['projects'] = normalized_projects
     return data
 
 
@@ -175,6 +223,47 @@ def _clean_links(raw_links):
     return cleaned
 
 
+def _merge_boards(existing, incoming):
+    base = copy.deepcopy(_normalize_board(copy.deepcopy(existing)))
+    incoming_board = _normalize_board(copy.deepcopy(incoming))
+
+    columns_lookup = {col['id']: col for col in base.get('columns', [])}
+    for inc_col in incoming_board.get('columns', []):
+        col_id = inc_col['id']
+        if col_id in columns_lookup:
+            target = columns_lookup[col_id]
+            target['title'] = inc_col.get('title', target['title'])
+            target['color'] = inc_col.get('color', target.get('color'))
+            target['hidden'] = bool(inc_col.get('hidden', target.get('hidden', False)))
+            existing_ids = {card['id'] for card in target.get('cards', [])}
+            for card in inc_col.get('cards', []):
+                sanitized = _sanitize_card(card)
+                if not sanitized:
+                    continue
+                if sanitized['id'] in existing_ids:
+                    sanitized['id'] = str(uuid.uuid4())
+                existing_ids.add(sanitized['id'])
+                target.setdefault('cards', []).append(sanitized)
+        else:
+            base.setdefault('columns', []).append(copy.deepcopy(inc_col))
+            columns_lookup[col_id] = base['columns'][-1]
+
+    projects = base.setdefault('projects', [])
+    project_lookup = {proj['name']: proj for proj in projects if proj.get('name')}
+    for proj in incoming_board.get('projects', []):
+        name = proj.get('name')
+        if not name:
+            continue
+        if name in project_lookup:
+            if proj.get('color'):
+                project_lookup[name]['color'] = proj['color']
+        else:
+            projects.append({'name': name, 'color': proj.get('color') or DEFAULT_CARD_COLOR})
+            project_lookup[name] = projects[-1]
+
+    return _normalize_board(base)
+
+
 
 @app.route('/')
 def index():
@@ -184,6 +273,36 @@ def index():
 @app.route('/api/board', methods=['GET'])
 def get_board():
     return jsonify(_load_data())
+
+
+@app.route('/api/board/export', methods=['GET'])
+def export_board():
+    _ensure_data_file()
+    return send_file(DATA_FILE, mimetype='application/json', as_attachment=True, download_name='kanban.json')
+
+
+@app.route('/api/board/import', methods=['POST'])
+def import_board():
+    upload = request.files.get('file')
+    if not upload:
+        return jsonify({'error': 'Import file is required'}), 400
+    try:
+        payload = json.load(upload)
+    except json.JSONDecodeError:
+        return jsonify({'error': 'Uploaded file is not valid JSON'}), 400
+
+    mode = (request.form.get('mode') or 'merge').lower()
+    if mode not in {'merge', 'replace'}:
+        mode = 'merge'
+
+    if mode == 'replace':
+        board = _normalize_board(payload)
+    else:
+        current = _load_data()
+        board = _merge_boards(current, payload)
+
+    _save_data(board)
+    return jsonify({'status': 'ok', 'mode': mode})
 
 
 @app.route('/api/card', methods=['POST'])
