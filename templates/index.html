@@ -9,8 +9,11 @@
   </head>
   <body>
     <header>
-      <h1>Personal Kanban</h1>
-      <button id="settingsBtn" title="Board settings">⚙️ Settings</button>
+      <div class="header-top">
+        <h1>Personal Kanban</h1>
+        <button id="settingsBtn" title="Board settings">⚙️ Settings</button>
+      </div>
+      <div id="projectFilters" class="project-filters" aria-live="polite"></div>
     </header>
     <main id="board" class="board">
       <!-- Columns render here -->
@@ -18,6 +21,7 @@
 
     <script>
       let latestBoard = null;
+      let activeProjectFilter = null;
       async function fetchBoard() {
         const res = await fetch('/api/board');
         latestBoard = await res.json();
@@ -35,6 +39,33 @@
         const g = parseInt(hex.slice(2,4),16);
         const b = parseInt(hex.slice(4,6),16);
         return `rgba(${r},${g},${b},${alpha})`;
+      }
+
+      function sanitizeProjectColor(value){
+        if(typeof value !== 'string'){
+          return '#5b2e8a';
+        }
+        const trimmed = value.trim();
+        if(/^#[0-9a-fA-F]{3}$/.test(trimmed) || /^#[0-9a-fA-F]{6}$/.test(trimmed)){
+          return trimmed;
+        }
+        return '#5b2e8a';
+      }
+
+      function collectProjectCounts(board){
+        const counts = new Map();
+        if(!board || !Array.isArray(board.columns)){
+          return counts;
+        }
+        board.columns.forEach(col => {
+          if(!Array.isArray(col.cards)) return;
+          col.cards.forEach(card => {
+            const projectName = card && card.project ? card.project.trim() : '';
+            if(!projectName) return;
+            counts.set(projectName, (counts.get(projectName) || 0) + 1);
+          });
+        });
+        return counts;
       }
 
       // keep descriptions as plain escaped text — markdown/link parsing is intentionally disabled
@@ -244,8 +275,77 @@
         return s.replace(/[&<>"']/g, function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[m];});
       }
 
-      async function render(){
-        const board = await fetchBoard();
+      function renderProjectFilters(board, projectMap){
+        const container = document.getElementById('projectFilters');
+        if(!container){
+          return;
+        }
+        const projectCounts = collectProjectCounts(board);
+        if(activeProjectFilter && !projectCounts.has(activeProjectFilter)){
+          activeProjectFilter = null;
+        }
+        container.innerHTML = '';
+        if(projectCounts.size === 0){
+          const placeholder = document.createElement('div');
+          placeholder.className = 'project-filters-empty';
+          placeholder.textContent = 'Tag tasks with a project to enable filtering.';
+          container.appendChild(placeholder);
+          return;
+        }
+
+        const seen = new Set();
+        const orderedNames = [];
+        if(Array.isArray(board.projects)){
+          board.projects.forEach(proj => {
+            const name = proj && proj.name ? proj.name.trim() : '';
+            if(name && projectCounts.has(name) && !seen.has(name)){
+              orderedNames.push(name);
+              seen.add(name);
+            }
+          });
+        }
+        projectCounts.forEach((_, name) => {
+          if(!seen.has(name)){
+            orderedNames.push(name);
+            seen.add(name);
+          }
+        });
+
+        orderedNames.forEach(name => {
+          const count = projectCounts.get(name) || 0;
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'project-filter-pill' + (activeProjectFilter === name ? ' active' : '');
+          button.dataset.project = name;
+          button.setAttribute('aria-pressed', activeProjectFilter === name ? 'true' : 'false');
+
+          const projectDetails = projectMap ? projectMap.get(name) : null;
+          const baseColor = projectDetails && projectDetails.color ? projectDetails.color : '#5b2e8a';
+          const safeColor = sanitizeProjectColor(baseColor);
+
+          const dot = document.createElement('span');
+          dot.className = 'project-filter-pill-dot';
+          dot.style.backgroundColor = safeColor;
+
+          const label = document.createElement('span');
+          label.className = 'project-filter-pill-label';
+          label.textContent = `${name} (${count})`;
+
+          button.appendChild(dot);
+          button.appendChild(label);
+
+          button.addEventListener('click', () => {
+            activeProjectFilter = activeProjectFilter === name ? null : name;
+            render({useLatest: true});
+          });
+
+          container.appendChild(button);
+        });
+      }
+
+      async function render(options = {}){
+        const useLatest = !!options.useLatest;
+        const board = useLatest && latestBoard ? latestBoard : await fetchBoard();
         const boardEl = document.getElementById('board');
         const projectMap = new Map();
         if(Array.isArray(board.projects)){
@@ -256,6 +356,8 @@
           });
         }
 
+        renderProjectFilters(board, projectMap);
+
         hideDropZones();
         hideLinkPreviewImmediate();
         hideProjectPreviewImmediate();
@@ -264,6 +366,13 @@
           if(col.hidden){
             continue;
           }
+          const cardsInColumn = Array.isArray(col.cards) ? col.cards : [];
+          const visibleCards = !activeProjectFilter
+            ? cardsInColumn
+            : cardsInColumn.filter(card => {
+                const projectName = card && card.project ? card.project.trim() : '';
+                return projectName === activeProjectFilter;
+              });
           const colEl = document.createElement('div');
           colEl.className = 'column';
           colEl.dataset.column = col.id;
@@ -276,7 +385,10 @@
 
           const header = document.createElement('div');
           header.className = 'col-header';
-          header.textContent = `${col.title} (${col.cards.length})`;
+          const visibleCount = visibleCards.length;
+          const totalCount = cardsInColumn.length;
+          const countLabel = activeProjectFilter ? `${visibleCount}/${totalCount || 0}` : `${visibleCount}`;
+          header.textContent = `${col.title} (${countLabel})`;
           colEl.appendChild(header);
 
           const list = document.createElement('div');
@@ -294,7 +406,7 @@
             render();
           });
 
-          for(const card of col.cards){
+          for(const card of visibleCards){
             list.appendChild(createCardElement(card, projectMap));
           }
 

@@ -1,6 +1,15 @@
 body{font-family:Segoe UI,Roboto,Arial;background:#f4f6f8;margin:0;padding:0;height:100vh;min-height:100vh;display:flex;flex-direction:column}
-header{display:flex;align-items:center;justify-content:space-between;padding:10px 20px;background:#fff;border-bottom:1px solid #e0e0e0}
+header{display:flex;flex-direction:column;gap:12px;padding:14px 20px;background:#fff;border-bottom:1px solid #e0e0e0}
+.header-top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 header h1{margin:0}
+.project-filters{display:flex;flex-wrap:wrap;gap:8px;align-items:center;min-height:32px}
+.project-filters-empty{font-size:13px;color:#5f6368}
+.project-filter-pill{display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(91,46,138,0.35);border-radius:999px;padding:6px 12px;background:#f8f2ff;color:#1b1033;font-weight:600;font-size:13px;font-family:inherit;cursor:pointer;transition:background 0.2s ease,border-color 0.2s ease,color 0.2s ease,box-shadow 0.2s ease;box-shadow:0 1px 2px rgba(0,0,0,0.08)}
+.project-filter-pill:hover{border-color:#5b2e8a;background:#f1e7ff}
+.project-filter-pill:focus-visible{outline:2px solid #5b2e8a;outline-offset:2px}
+.project-filter-pill.active{background:#5b2e8a;color:#fff;border-color:#5b2e8a;box-shadow:0 4px 10px rgba(91,46,138,0.25)}
+.project-filter-pill-dot{width:10px;height:10px;border-radius:50%;border:1px solid rgba(0,0,0,0.15);box-shadow:0 0 0 2px rgba(255,255,255,0.8)}
+.project-filter-pill-label{white-space:nowrap}
 .board{display:flex;gap:12px;padding:20px;flex:1;align-items:stretch;overflow-x:auto;overflow-y:hidden;min-height:0}
 .column{background:#fff;border:1px solid #e0e0e0;border-radius:6px;padding:10px;flex:1;min-width:220px}
 .col-header{font-weight:600;margin-bottom:8px}
