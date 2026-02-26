@@ -10,10 +10,9 @@
   <body>
     <header>
       <div class="header-top">
-        <h1>Personal Kanban</h1>
+        <div id="projectFilters" class="project-filters" aria-live="polite"></div>
         <button id="settingsBtn" title="Board settings">⚙️ Settings</button>
       </div>
-      <div id="projectFilters" class="project-filters" aria-live="polite"></div>
     </header>
     <main id="board" class="board">
       <!-- Columns render here -->
@@ -58,6 +57,9 @@
           return counts;
         }
         board.columns.forEach(col => {
+          if(col && col.hidden){
+            return;
+          }
           if(!Array.isArray(col.cards)) return;
           col.cards.forEach(card => {
             const projectName = card && card.project ? card.project.trim() : '';
