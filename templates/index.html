@@ -220,9 +220,15 @@
           <div class="card-title">${escapeHtml(card.title)}</div>
           <div class="card-desc">${escapeHtmlWithBr(card.description || '')}</div>
           <div class="card-footer">
-            ${projectName ? `<div class="card-project" title="Project: ${escapeHtml(projectName)}">${escapeHtml(projectName)}</div>` : ''}
-            ${linkCount > 0 ? `<div class="card-links" title="${linkCount} link${linkCount!==1?'s':''}">🔗 ${linkCount}</div>` : ''}
-            <button class="edit" title="Edit card">✏️</button>
+            <div class="card-footer-left">
+              ${linkCount > 0 ? `<div class="card-links" title="${linkCount} link${linkCount!==1?'s':''}">🔗 ${linkCount}</div>` : ''}
+            </div>
+            <div class="card-footer-center">
+              ${projectName ? `<div class="card-project" title="Project: ${escapeHtml(projectName)}">${escapeHtml(projectName)}</div>` : ''}
+            </div>
+            <div class="card-footer-right">
+              <button class="edit" title="Edit card">✏️</button>
+            </div>
           </div>
         `;
 

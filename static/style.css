@@ -21,7 +21,10 @@ header{display:flex;flex-direction:column;gap:10px;padding:14px 20px;background:
 .card .card-title{font-weight:600}
 .card .card-desc{word-break:break-word;overflow-wrap:anywhere;flex:1;min-height:0}
 .card.card-truncated .card-desc{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;text-overflow:ellipsis}
-.card-footer{display:flex;align-items:center;justify-content:space-between;gap:4px;margin-top:8px;flex-shrink:0}
+.card-footer{display:flex;align-items:center;gap:4px;margin-top:8px;flex-shrink:0}
+.card-footer-left{flex:1;display:flex;justify-content:flex-start;align-items:center}
+.card-footer-center{flex:1;display:flex;justify-content:center;align-items:center}
+.card-footer-right{flex:1;display:flex;justify-content:flex-end;align-items:center}
 .card .card-links{font-size:13px;color:#4b4b4b;display:flex;align-items:center;gap:4px;background:rgba(0,0,0,0.05);padding:2px 8px;border-radius:14px;font-weight:600;cursor:pointer}
 .card .card-project{font-size:13px;color:var(--project-pill-text,#1b1b25);background:var(--project-pill-bg,rgba(255,255,255,0.85));padding:2px 12px;border-radius:16px;font-weight:600;box-shadow:0 2px 6px rgba(0,0,0,0.12);white-space:nowrap;pointer-events:auto;border:2px solid var(--project-pill-border,rgba(0,0,0,0.12));transition:background 0.2s ease,border-color 0.2s ease,color 0.2s ease;cursor:pointer;user-select:none}
 .card .edit{border:0;background:transparent;cursor:pointer;font-size:16px;padding:2px 4px}
