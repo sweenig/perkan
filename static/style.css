@@ -16,15 +16,15 @@ header{display:flex;flex-direction:column;gap:10px;padding:14px 20px;background:
 .column{border-radius:6px;position:relative;box-sizing:border-box}
 .column{display:flex;flex-direction:column;height:100%;min-height:0}
 .card-list{flex:1;overflow-y:auto;padding-right:6px;min-height:0}
-.card{background:#fafafa;border:1px solid #ddd;padding:8px;border-radius:6px;margin-bottom:8px;cursor:grab;position:relative;min-height:60px}
+.card{background:#fafafa;border:1px solid #ddd;padding:8px;border-radius:6px;margin-bottom:8px;cursor:grab;position:relative;min-height:60px;display:flex;flex-direction:column}
+.card.card-truncated{max-height:175px}
 .card .card-title{font-weight:600}
-.card .card-desc{word-break:break-word;overflow-wrap:anywhere;padding-bottom:48px}
-.card .card-links{position:absolute;left:8px;bottom:6px;font-size:13px;color:#4b4b4b;display:flex;align-items:center;gap:4px;background:rgba(0,0,0,0.05);padding:2px 8px;border-radius:14px;font-weight:600;cursor:pointer}
-.card .card-project{position:absolute;left:50%;bottom:6px;transform:translateX(-50%);font-size:13px;color:var(--project-pill-text,#1b1b25);background:var(--project-pill-bg,rgba(255,255,255,0.85));padding:2px 12px;border-radius:16px;font-weight:600;box-shadow:0 2px 6px rgba(0,0,0,0.12);white-space:nowrap;pointer-events:auto;border:2px solid var(--project-pill-border,rgba(0,0,0,0.12));transition:background 0.2s ease,border-color 0.2s ease,color 0.2s ease;cursor:pointer;user-select:none}
-.drop-zone{margin-bottom:10px;padding:14px;border:2px dashed #b78ef5;border-radius:8px;text-align:center;font-weight:600;color:#b78ef5;background:rgba(183,142,245,0.08);pointer-events:none;opacity:0;transform:scale(0.95);transition:opacity 0.15s ease,transform 0.15s ease}
-.drop-zone.visible{opacity:1;transform:scale(1)}
-.card .edit{position:absolute;right:6px;bottom:6px;border:0;background:transparent;cursor:pointer;font-size:16px;padding:2px 4px}
-
+.card .card-desc{word-break:break-word;overflow-wrap:anywhere;flex:1;min-height:0}
+.card.card-truncated .card-desc{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;text-overflow:ellipsis}
+.card-footer{display:flex;align-items:center;justify-content:space-between;gap:4px;margin-top:8px;flex-shrink:0}
+.card .card-links{font-size:13px;color:#4b4b4b;display:flex;align-items:center;gap:4px;background:rgba(0,0,0,0.05);padding:2px 8px;border-radius:14px;font-weight:600;cursor:pointer}
+.card .card-project{font-size:13px;color:var(--project-pill-text,#1b1b25);background:var(--project-pill-bg,rgba(255,255,255,0.85));padding:2px 12px;border-radius:16px;font-weight:600;box-shadow:0 2px 6px rgba(0,0,0,0.12);white-space:nowrap;pointer-events:auto;border:2px solid var(--project-pill-border,rgba(0,0,0,0.12));transition:background 0.2s ease,border-color 0.2s ease,color 0.2s ease;cursor:pointer;user-select:none}
+.card .edit{border:0;background:transparent;cursor:pointer;font-size:16px;padding:2px 4px}
 .card-link-popup{position:absolute;z-index:40;min-width:220px;background:#0f0f18;color:#f4f6f8;border:1px solid rgba(255,255,255,0.18);border-radius:8px;padding:10px;box-shadow:0 12px 28px rgba(0,0,0,0.5);font-size:13px;line-height:1.4}
 .card-link-popup.hidden{display:none}
 .card-link-popup ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
@@ -72,7 +72,8 @@ header{display:flex;flex-direction:column;gap:10px;padding:14px 20px;background:
 .project-option.empty{color:rgba(255,255,255,0.6);cursor:default}
 
 /* Settings modal */
-#settingsBtn{margin-left:8px;padding:6px 10px;flex-shrink:0}
+#truncateBtn,#settingsBtn{margin-left:8px;padding:6px 10px;flex-shrink:0}
+#truncateBtn.active{background:#5b2e8a;color:#fff}
 .modal{position:fixed;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center}
 .modal.hidden{display:none}
 .modal-backdrop{position:absolute;inset:0;background:rgba(0,0,0,0.4)}

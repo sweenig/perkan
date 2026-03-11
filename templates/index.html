@@ -11,6 +11,7 @@
     <header>
       <div class="header-top">
         <div id="projectFilters" class="project-filters" aria-live="polite"></div>
+        <button id="truncateBtn" title="Toggle card truncation" aria-pressed="false">📋 Truncate</button>
         <button id="settingsBtn" title="Board settings">⚙️ Settings</button>
       </div>
     </header>
@@ -21,6 +22,7 @@
     <script>
       let latestBoard = null;
       let activeProjectFilter = null;
+      let cardTruncationEnabled = localStorage.getItem('cardTruncationEnabled') !== 'false';
       async function fetchBoard() {
         const res = await fetch('/api/board');
         latestBoard = await res.json();
@@ -211,15 +213,17 @@
         const projectDetails = projectMap && projectMap.get(projectName);
         const projectColor = projectDetails && projectDetails.color ? projectDetails.color : null;
         const el = document.createElement('div');
-        el.className = 'card';
+        el.className = 'card' + (cardTruncationEnabled ? ' card-truncated' : '');
         el.draggable = true;
         el.dataset.id = card.id;
         el.innerHTML = `
           <div class="card-title">${escapeHtml(card.title)}</div>
-          <div class="card-desc">${escapeHtml(card.description || '')}</div>
-          ${projectName ? `<div class="card-project" title="Project: ${escapeHtml(projectName)}">${escapeHtml(projectName)}</div>` : ''}
-          ${linkCount > 0 ? `<div class="card-links" title="${linkCount} link${linkCount!==1?'s':''}">🔗 ${linkCount}</div>` : ''}
-          <button class="edit" title="Edit card">✏️</button>
+          <div class="card-desc">${escapeHtmlWithBr(card.description || '')}</div>
+          <div class="card-footer">
+            ${projectName ? `<div class="card-project" title="Project: ${escapeHtml(projectName)}">${escapeHtml(projectName)}</div>` : ''}
+            ${linkCount > 0 ? `<div class="card-links" title="${linkCount} link${linkCount!==1?'s':''}">🔗 ${linkCount}</div>` : ''}
+            <button class="edit" title="Edit card">✏️</button>
+          </div>
         `;
 
         const cardColor = projectColor || card.color || '#5b2e8a';
@@ -275,6 +279,11 @@
 
       function escapeHtml(s){
         return s.replace(/[&<>"']/g, function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[m];});
+      }
+
+      function escapeHtmlWithBr(s){
+        const escaped = escapeHtml(s);
+        return escaped.replace(/\n/g, '<br />');
       }
 
       function renderProjectFilters(board, projectMap){
@@ -978,6 +987,15 @@
         });
       });
 
+      document.getElementById('truncateBtn').addEventListener('click', ()=>{
+        cardTruncationEnabled = !cardTruncationEnabled;
+        localStorage.setItem('cardTruncationEnabled', cardTruncationEnabled);
+        const btn = document.getElementById('truncateBtn');
+        btn.setAttribute('aria-pressed', cardTruncationEnabled ? 'true' : 'false');
+        btn.classList.toggle('active', cardTruncationEnabled);
+        render({useLatest: true});
+      });
+
       document.getElementById('settingsBtn').addEventListener('click', ()=>{
         const modal = document.getElementById('settingsModal');
         if(modal.classList.contains('hidden')){
@@ -1275,6 +1293,13 @@
           if(cem && !cem.classList.contains('hidden')) cem.classList.add('hidden');
         }
       });
+
+      // Apply initial truncation state to button
+      const truncateBtn = document.getElementById('truncateBtn');
+      if(cardTruncationEnabled){
+        truncateBtn.setAttribute('aria-pressed', 'true');
+        truncateBtn.classList.add('active');
+      }
 
       // Initial render
       render();
