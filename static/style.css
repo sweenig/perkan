@@ -27,7 +27,8 @@ header{display:flex;flex-direction:column;gap:10px;padding:14px 20px;background:
 .card-footer-right{flex:1;display:flex;justify-content:flex-end;align-items:center}
 .card .card-links{font-size:13px;color:#4b4b4b;display:flex;align-items:center;gap:4px;background:rgba(0,0,0,0.05);padding:2px 8px;border-radius:14px;font-weight:600;cursor:pointer}
 .card .card-project{font-size:13px;color:var(--project-pill-text,#1b1b25);background:var(--project-pill-bg,rgba(255,255,255,0.85));padding:2px 12px;border-radius:16px;font-weight:600;box-shadow:0 2px 6px rgba(0,0,0,0.12);white-space:nowrap;pointer-events:auto;border:2px solid var(--project-pill-border,rgba(0,0,0,0.12));transition:background 0.2s ease,border-color 0.2s ease,color 0.2s ease;cursor:pointer;user-select:none}
-.card .edit{border:0;background:transparent;cursor:pointer;font-size:16px;padding:2px 4px}
+.card .edit{border:0;background:transparent;cursor:pointer;font-size:16px;padding:2px 4px;opacity:0;transition:opacity 0.2s ease}
+.card:hover .edit{opacity:1}
 .card-link-popup{position:absolute;z-index:40;min-width:220px;background:#0f0f18;color:#f4f6f8;border:1px solid rgba(255,255,255,0.18);border-radius:8px;padding:10px;box-shadow:0 12px 28px rgba(0,0,0,0.5);font-size:13px;line-height:1.4}
 .card-link-popup.hidden{display:none}
 .card-link-popup ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
