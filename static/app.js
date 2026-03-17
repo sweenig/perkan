@@ -1,0 +1,1369 @@
+let latestBoard = null;
+let activeProjectFilter = null;
+let cardTruncationEnabled = localStorage.getItem('cardTruncationEnabled') !== 'false';
+async function fetchBoard() {
+  const res = await fetch('/api/board');
+  latestBoard = await res.json();
+  return latestBoard;
+}
+
+function hexToRgba(hex, alpha){
+  // accepts #rrggbb or #rgb
+  if(!hex) return '';
+  hex = hex.replace('#','');
+  if(hex.length === 3){
+    hex = hex.split('').map(c=>c+c).join('');
+  }
+  const r = parseInt(hex.slice(0,2),16);
+  const g = parseInt(hex.slice(2,4),16);
+  const b = parseInt(hex.slice(4,6),16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function sanitizeProjectColor(value){
+  if(typeof value !== 'string'){
+    return '#5b2e8a';
+  }
+  const trimmed = value.trim();
+  if(/^#[0-9a-fA-F]{3}$/.test(trimmed) || /^#[0-9a-fA-F]{6}$/.test(trimmed)){
+    return trimmed;
+  }
+  return '#5b2e8a';
+}
+
+function collectProjectCounts(board){
+  const counts = new Map();
+  if(!board || !Array.isArray(board.columns)){
+    return counts;
+  }
+  board.columns.forEach(col => {
+    if(col && col.hidden){
+      return;
+    }
+    if(!Array.isArray(col.cards)) return;
+    col.cards.forEach(card => {
+      const projectName = card && card.project ? card.project.trim() : '';
+      if(!projectName) return;
+      counts.set(projectName, (counts.get(projectName) || 0) + 1);
+    });
+  });
+  return counts;
+}
+
+// keep descriptions as plain escaped text — markdown/link parsing is intentionally disabled
+
+let dropZonesVisible = false;
+function showDropZones(){
+  if(dropZonesVisible) return;
+  dropZonesVisible = true;
+  document.querySelectorAll('.card-list').forEach(list => {
+    if(list.querySelector('.drop-zone')) return;
+    const zone = document.createElement('div');
+    zone.className = 'drop-zone visible';
+    zone.textContent = 'Drop here to move';
+    list.appendChild(zone);
+  });
+}
+
+function hideDropZones(){
+  if(!dropZonesVisible) return;
+  dropZonesVisible = false;
+  document.querySelectorAll('.drop-zone').forEach(zone => zone.remove());
+}
+
+const linkPreview = document.createElement('div');
+linkPreview.id = 'cardLinkPreview';
+linkPreview.className = 'card-link-popup hidden';
+document.body.appendChild(linkPreview);
+
+let linkPreviewHideTimer = null;
+
+function cancelLinkPreviewHide(){
+  if(linkPreviewHideTimer){
+    clearTimeout(linkPreviewHideTimer);
+    linkPreviewHideTimer = null;
+  }
+}
+
+function hideLinkPreviewImmediate(){
+  cancelLinkPreviewHide();
+  if(!linkPreview.classList.contains('hidden')){
+    linkPreview.classList.add('hidden');
+  }
+}
+
+function scheduleLinkPreviewHide(){
+  cancelLinkPreviewHide();
+  linkPreviewHideTimer = setTimeout(()=>{
+    linkPreview.classList.add('hidden');
+  }, 120);
+}
+
+function showLinkPreview(links, anchorEl){
+  if(!Array.isArray(links) || !links.length){
+    hideLinkPreviewImmediate();
+    return;
+  }
+  cancelLinkPreviewHide();
+  const items = links.map(link => {
+    const safeText = escapeHtml((link && (link.text || link.url)) || 'Link');
+    const safeUrl = escapeHtml((link && link.url) || '#');
+    return `<li><a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${safeText}</a></li>`;
+  }).join('');
+  linkPreview.innerHTML = `<ul>${items}</ul>`;
+  const rect = anchorEl.getBoundingClientRect();
+  linkPreview.style.top = `${window.scrollY + rect.bottom + 6}px`;
+  linkPreview.style.left = `${window.scrollX + rect.left}px`;
+  linkPreview.classList.remove('hidden');
+}
+
+linkPreview.addEventListener('mouseenter', cancelLinkPreviewHide);
+linkPreview.addEventListener('mouseleave', scheduleLinkPreviewHide);
+
+const projectPreview = document.createElement('div');
+projectPreview.id = 'projectPreview';
+projectPreview.className = 'project-info-popup hidden';
+document.body.appendChild(projectPreview);
+
+let projectPreviewHideTimer = null;
+
+function cancelProjectPreviewHide(){
+  if(projectPreviewHideTimer){
+    clearTimeout(projectPreviewHideTimer);
+    projectPreviewHideTimer = null;
+  }
+}
+
+function hideProjectPreviewImmediate(){
+  cancelProjectPreviewHide();
+  if(!projectPreview.classList.contains('hidden')){
+    projectPreview.classList.add('hidden');
+  }
+}
+
+function scheduleProjectPreviewHide(){
+  cancelProjectPreviewHide();
+  projectPreviewHideTimer = setTimeout(()=>{
+    projectPreview.classList.add('hidden');
+  }, 120);
+}
+
+function showProjectPreview(projectDetails, anchorEl){
+  if(!projectDetails){
+    hideProjectPreviewImmediate();
+    return;
+  }
+  cancelProjectPreviewHide();
+  const rawName = projectDetails.name || '';
+  const projectName = escapeHtml(rawName || 'Untitled project');
+  const projectColor = escapeHtml(projectDetails.color || '#5b2e8a');
+  projectPreview.dataset.project = rawName;
+  projectPreview.innerHTML = `
+    <div class="project-preview-top">
+      <span class="project-preview-dot" style="background:${projectColor};"></span>
+      <div class="project-preview-text">
+        <div class="project-preview-name">${projectName}</div>
+        <div class="project-preview-color">${projectColor}</div>
+      </div>
+      <button type="button" class="project-preview-edit" title="Edit project">✏️</button>
+    </div>
+  `;
+  const rect = anchorEl.getBoundingClientRect();
+  projectPreview.style.top = `${window.scrollY + rect.bottom + 6}px`;
+  projectPreview.style.left = `${window.scrollX + rect.left}px`;
+  projectPreview.classList.remove('hidden');
+}
+
+projectPreview.addEventListener('mouseenter', cancelProjectPreviewHide);
+projectPreview.addEventListener('mouseleave', scheduleProjectPreviewHide);
+projectPreview.addEventListener('click', (e) => {
+  if(e.target.closest('.project-preview-edit')){
+    const projectName = projectPreview.dataset.project || '';
+    hideProjectPreviewImmediate();
+    openSettingsModal('projects');
+    focusProjectInSettings(projectName);
+  }
+});
+
+function createCardElement(card, projectMap) {
+  const linkCount = Array.isArray(card.links) ? card.links.length : 0;
+  const projectName = card.project || '';
+  const projectDetails = projectMap && projectMap.get(projectName);
+  const projectColor = projectDetails && projectDetails.color ? projectDetails.color : null;
+  const el = document.createElement('div');
+  el.className = 'card' + (cardTruncationEnabled ? ' card-truncated' : '');
+  el.draggable = true;
+  el.dataset.id = card.id;
+  el.innerHTML = `
+    <div class="card-title">${escapeHtml(card.title)}</div>
+    <div class="card-desc">${escapeHtmlWithBr(card.description || '')}</div>
+    <div class="card-footer">
+      <div class="card-footer-left">
+        ${linkCount > 0 ? `<div class="card-links" title="${linkCount} link${linkCount!==1?'s':''}">🔗 ${linkCount}</div>` : ''}
+      </div>
+      <div class="card-footer-center">
+        ${projectName ? `<div class="card-project" title="Project: ${escapeHtml(projectName)}">${escapeHtml(projectName)}</div>` : ''}
+      </div>
+      <div class="card-footer-right">
+        <button class="edit" title="Edit card">✏️</button>
+      </div>
+    </div>
+  `;
+
+  const cardColor = projectColor || card.color || '#5b2e8a';
+  el.style.borderColor = cardColor;
+  el.style.borderWidth = '2px';
+  el.style.backgroundColor = hexToRgba(cardColor, 0.06);
+  if(projectColor){
+    el.style.setProperty('--project-pill-border', projectColor);
+    el.style.setProperty('--project-pill-text', projectColor);
+    el.style.setProperty('--project-pill-bg', hexToRgba(projectColor, 0.12));
+  } else {
+    el.style.removeProperty('--project-pill-border');
+    el.style.removeProperty('--project-pill-text');
+    el.style.removeProperty('--project-pill-bg');
+  }
+
+  el.addEventListener('dragstart', (e) => {
+    e.dataTransfer.setData('text/plain', card.id);
+    e.dataTransfer.effectAllowed = 'move';
+    showDropZones();
+  });
+  el.addEventListener('dragend', () => {
+    hideDropZones();
+  });
+
+  el.querySelector('.edit').addEventListener('click', async (ev) => {
+    ev.stopPropagation();
+    await openCardEditModal(card);
+  });
+
+  const projectBadge = el.querySelector('.card-project');
+  if(projectBadge && projectName){
+    projectBadge.addEventListener('mouseenter', () => {
+      const previewDetails = projectDetails || {name: projectName, color: projectColor || card.color || '#5b2e8a'};
+      showProjectPreview(previewDetails, projectBadge);
+    });
+    projectBadge.addEventListener('mouseleave', () => {
+      scheduleProjectPreviewHide();
+    });
+  }
+
+  const linkBadge = el.querySelector('.card-links');
+  if(linkBadge){
+    linkBadge.addEventListener('mouseenter', () => {
+      showLinkPreview(card.links, linkBadge);
+    });
+    linkBadge.addEventListener('mouseleave', () => {
+      scheduleLinkPreviewHide();
+    });
+  }
+  return el;
+}
+
+function escapeHtml(s){
+  return s.replace(/[&<>"']/g, function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[m];});
+}
+
+function escapeHtmlWithBr(s){
+  const escaped = escapeHtml(s);
+  return escaped.replace(/\n/g, '<br />');
+}
+
+function renderProjectFilters(board, projectMap){
+  const container = document.getElementById('projectFilters');
+  if(!container){
+    return;
+  }
+  const projectCounts = collectProjectCounts(board);
+  if(activeProjectFilter && !projectCounts.has(activeProjectFilter)){
+    activeProjectFilter = null;
+  }
+  container.innerHTML = '';
+  if(projectCounts.size === 0){
+    const placeholder = document.createElement('div');
+    placeholder.className = 'project-filters-empty';
+    placeholder.textContent = 'Tag tasks with a project to enable filtering.';
+    container.appendChild(placeholder);
+    return;
+  }
+
+  const seen = new Set();
+  const orderedNames = [];
+  if(Array.isArray(board.projects)){
+    board.projects.forEach(proj => {
+      const name = proj && proj.name ? proj.name.trim() : '';
+      if(name && projectCounts.has(name) && !seen.has(name)){
+        orderedNames.push(name);
+        seen.add(name);
+      }
+    });
+  }
+  projectCounts.forEach((_, name) => {
+    if(!seen.has(name)){
+      orderedNames.push(name);
+      seen.add(name);
+    }
+  });
+
+  orderedNames.forEach(name => {
+    const count = projectCounts.get(name) || 0;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'project-filter-pill' + (activeProjectFilter === name ? ' active' : '');
+    button.dataset.project = name;
+    button.setAttribute('aria-pressed', activeProjectFilter === name ? 'true' : 'false');
+
+    const projectDetails = projectMap ? projectMap.get(name) : null;
+    const baseColor = projectDetails && projectDetails.color ? projectDetails.color : '#5b2e8a';
+    const safeColor = sanitizeProjectColor(baseColor);
+
+    const dot = document.createElement('span');
+    dot.className = 'project-filter-pill-dot';
+    dot.style.backgroundColor = safeColor;
+
+    const label = document.createElement('span');
+    label.className = 'project-filter-pill-label';
+    label.textContent = `${name} (${count})`;
+
+    button.appendChild(dot);
+    button.appendChild(label);
+
+    button.addEventListener('click', () => {
+      activeProjectFilter = activeProjectFilter === name ? null : name;
+      render({useLatest: true});
+    });
+
+    container.appendChild(button);
+  });
+}
+
+async function render(options = {}){
+  const useLatest = !!options.useLatest;
+  const board = useLatest && latestBoard ? latestBoard : await fetchBoard();
+  const boardEl = document.getElementById('board');
+  const projectMap = new Map();
+  if(Array.isArray(board.projects)){
+    board.projects.forEach(proj => {
+      if(proj && proj.name){
+        projectMap.set(proj.name, proj);
+      }
+    });
+  }
+
+  renderProjectFilters(board, projectMap);
+
+  hideDropZones();
+  hideLinkPreviewImmediate();
+  hideProjectPreviewImmediate();
+  boardEl.innerHTML = '';
+  for(const col of board.columns){
+    if(col.hidden){
+      continue;
+    }
+    const cardsInColumn = Array.isArray(col.cards) ? col.cards : [];
+    const visibleCards = !activeProjectFilter
+      ? cardsInColumn
+      : cardsInColumn.filter(card => {
+          const projectName = card && card.project ? card.project.trim() : '';
+          return projectName === activeProjectFilter;
+        });
+    const colEl = document.createElement('div');
+    colEl.className = 'column';
+    colEl.dataset.column = col.id;
+
+    // apply color styling
+    const outline = col.color || '#e0e0e0';
+    colEl.style.borderColor = outline;
+    colEl.style.borderWidth = '2px';
+    colEl.style.backgroundColor = hexToRgba(outline, 0.06);
+
+    const header = document.createElement('div');
+    header.className = 'col-header';
+    const visibleCount = visibleCards.length;
+    const totalCount = cardsInColumn.length;
+    const countLabel = activeProjectFilter ? `${visibleCount}/${totalCount || 0}` : `${visibleCount}`;
+    header.textContent = `${col.title} (${countLabel})`;
+    colEl.appendChild(header);
+
+    const list = document.createElement('div');
+    list.className = 'card-list';
+    list.addEventListener('dragover', (e)=>{e.preventDefault();});
+    list.addEventListener('drop', async (e)=>{
+      e.preventDefault();
+      hideDropZones();
+      const id = e.dataTransfer.getData('text/plain');
+      await fetch('/api/card/' + id, {
+        method: 'PUT',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({column: col.id})
+      });
+      render();
+    });
+
+    for(const card of visibleCards){
+      list.appendChild(createCardElement(card, projectMap));
+    }
+
+    colEl.appendChild(list);
+
+    // per-column add button (bottom-right)
+    const addBtn = document.createElement('button');
+    addBtn.className = 'col-add';
+    addBtn.title = 'Add card';
+    addBtn.textContent = '+';
+    addBtn.addEventListener('click', ()=>{
+      openCardModal(col.id);
+    });
+    colEl.appendChild(addBtn);
+
+    boardEl.appendChild(colEl);
+  }
+
+  refreshProjectInputs();
+}
+
+// Global add removed: use per-column + buttons to add cards.
+
+// Settings modal
+const settingsModal = document.createElement('div');
+settingsModal.id = 'settingsModal';
+// hidden by default
+settingsModal.className = 'modal hidden';
+settingsModal.innerHTML = `
+  <div class="modal-backdrop"></div>
+  <div class="modal-content">
+    <h2>Board Settings</h2>
+    <div class="settings-tabs" role="tablist">
+      <button type="button" class="settings-tab-btn active" data-tab="statuses">Statuses</button>
+      <button type="button" class="settings-tab-btn" data-tab="projects">Projects</button>
+      <button type="button" class="settings-tab-btn" data-tab="import">Import/Export</button>
+      <button type="button" class="settings-tab-btn" data-tab="about">About</button>
+    </div>
+    <div class="settings-tab-panels">
+      <div class="settings-tab-panel active" data-tab="statuses">
+        <div id="columnsList" class="columns-list"></div>
+        <div class="add-column">
+          <input id="newColumnTitle" placeholder="New column title" />
+          <input id="newColumnColor" type="color" value="#9aa0a6" />
+          <button id="addColumnBtn">Add Column</button>
+        </div>
+      </div>
+      <div class="settings-tab-panel" data-tab="projects">
+        <div id="projectsList" class="projects-list"></div>
+        <div class="add-project">
+          <input id="newProjectName" placeholder="New project name" />
+          <input id="newProjectColor" type="color" value="#5b2e8a" />
+          <button id="addProjectBtn">Add Project</button>
+        </div>
+      </div>
+      <div class="settings-tab-panel" data-tab="import">
+        <div class="import-export-panel">
+          <section class="import-block">
+            <h3>Export Board</h3>
+            <p>Download the current kanban.json file for safekeeping or migration.</p>
+            <button type="button" id="downloadBoardBtn">Download kanban.json</button>
+          </section>
+          <section class="import-block">
+            <h3>Import Board</h3>
+            <p>Select a saved kanban.json file and choose whether to merge or replace your current board.</p>
+            <input type="file" id="importFileInput" accept="application/json" />
+            <div class="import-mode">
+              <label><input type="radio" name="importMode" value="merge" checked /> Merge with existing data</label>
+              <label><input type="radio" name="importMode" value="replace" /> Replace existing data</label>
+            </div>
+            <div class="import-actions">
+              <button type="button" id="importBoardBtn">Import kanban.json</button>
+            </div>
+          </section>
+        </div>
+      </div>
+      <div class="settings-tab-panel" data-tab="about">
+        <div style="padding: 20px; text-align: center;">
+          <h3>Personal Kanban</h3>
+          <p style="font-size: 14px; color: rgba(255, 255, 255, 0.7); margin: 16px 0;">
+            Version 1.0
+          </p>
+          <p style="font-size: 14px; color: rgba(255, 255, 255, 0.7); margin: 16px 0;">
+            Written by Stuart Weenig
+          </p>
+          <p style="font-size: 12px; color: rgba(255, 255, 255, 0.6); margin-top: 24px;">
+            Licensed under GNU General Public License v3
+          </p>
+        </div>
+      </div>
+    </div>
+    <div class="modal-actions"><button id="closeSettings">Close</button></div>
+  </div>
+`;
+document.body.appendChild(settingsModal);
+
+async function renderStatusSettings(){
+  const board = await fetchBoard();
+  const list = document.getElementById('columnsList');
+  list.innerHTML = '';
+  board.columns.forEach((col, idx)=>{
+    const row = document.createElement('div');
+    row.className = 'col-row';
+    row.innerHTML = `
+      <input class="col-title" data-id="${col.id}" value="${escapeHtml(col.title)}" />
+      <input class="col-color" type="color" data-id="${col.id}" value="${col.color || '#9aa0a6'}" />
+      <label class="col-hide-toggle">
+        <input class="col-hidden" type="checkbox" data-id="${col.id}" ${col.hidden ? 'checked' : ''} />
+        Hide
+      </label>
+      <button class="col-up" data-id="${col.id}" data-idx="${idx}" ${idx===0? 'disabled':''}>↑</button>
+      <button class="col-down" data-id="${col.id}" data-idx="${idx}" ${idx===board.columns.length-1? 'disabled':''}>↓</button>
+      <button class="col-delete" data-id="${col.id}">Delete</button>
+    `;
+    list.appendChild(row);
+  });
+
+  // attach handlers
+  document.querySelectorAll('.col-title').forEach(inp=>{
+    inp.addEventListener('change', async (e)=>{
+      const id = e.target.dataset.id;
+      const title = e.target.value.trim();
+      if(!title) return alert('title required');
+      await fetch('/api/column/' + id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({title})});
+      render();
+      renderStatusSettings();
+    });
+  });
+  document.querySelectorAll('.col-color').forEach(inp=>{
+    inp.addEventListener('change', async (e)=>{
+      const id = e.target.dataset.id;
+      const color = e.target.value;
+      await fetch('/api/column/' + id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({color})});
+      render();
+      renderStatusSettings();
+    });
+  });
+  document.querySelectorAll('.col-hidden').forEach(inp=>{
+    inp.addEventListener('change', async (e)=>{
+      const id = e.target.dataset.id;
+      const hidden = e.target.checked;
+      await fetch('/api/column/' + id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({hidden})});
+      render();
+      renderStatusSettings();
+    });
+  });
+  document.querySelectorAll('.col-up').forEach(btn=>{
+    btn.addEventListener('click', async (e)=>{
+      const id = e.target.dataset.id;
+      const idx = parseInt(e.target.dataset.idx, 10);
+      const targetPos = Math.max(0, idx - 1);
+      await fetch('/api/column/' + id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({position:targetPos})});
+      // re-render to reflect the swap
+      render();
+      renderStatusSettings();
+    });
+  });
+  document.querySelectorAll('.col-down').forEach(btn=>{
+    btn.addEventListener('click', async (e)=>{
+      const id = e.target.dataset.id;
+      const idx = parseInt(e.target.dataset.idx, 10);
+      const targetPos = idx + 1;
+      await fetch('/api/column/' + id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({position:targetPos})});
+      render();
+      renderStatusSettings();
+    });
+  });
+  document.querySelectorAll('.col-delete').forEach(btn=>{
+    btn.addEventListener('click', async (e)=>{
+      const id = e.target.dataset.id;
+      if(!confirm('Delete this column? Cards in it will be removed unless moved.')) return;
+      const boardNow = await fetchBoard();
+      if(boardNow.columns.length <= 1){
+        return alert('Cannot delete the last column');
+      }
+      await fetch('/api/column/' + id, {method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
+      render();
+      renderStatusSettings();
+    });
+  });
+
+  refreshProjectInputs();
+}
+
+async function renderProjectSettings(){
+  const board = await fetchBoard();
+  const list = document.getElementById('projectsList');
+  if(!list) return;
+  list.innerHTML = '';
+  const projects = Array.isArray(board.projects) ? board.projects : [];
+  if(!projects.length){
+    const empty = document.createElement('div');
+    empty.className = 'project-empty';
+    empty.textContent = 'No projects yet';
+    list.appendChild(empty);
+  }
+  projects.forEach((proj, idx) => {
+    const row = document.createElement('div');
+    row.className = 'project-row';
+    row.innerHTML = `
+      <input class="project-name" data-index="${idx}" value="${escapeHtml(proj.name || '')}" placeholder="Project name" />
+      <input class="project-color" type="color" data-index="${idx}" value="${proj.color || '#5b2e8a'}" />
+      <button class="project-up" data-index="${idx}" ${idx===0? 'disabled':''}>↑</button>
+      <button class="project-down" data-index="${idx}" ${idx===projects.length-1? 'disabled':''}>↓</button>
+      <button class="project-delete" data-index="${idx}">Delete</button>
+    `;
+    list.appendChild(row);
+  });
+
+  list.querySelectorAll('.project-name').forEach(inp => {
+    inp.addEventListener('change', async (e) => {
+      const idx = parseInt(e.target.dataset.index, 10);
+      const name = e.target.value.trim();
+      if(!name){
+        alert('name required');
+        await renderProjectSettings();
+        return;
+      }
+      await fetch('/api/project/' + idx, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+      await render();
+      await renderProjectSettings();
+    });
+  });
+  list.querySelectorAll('.project-color').forEach(inp => {
+    inp.addEventListener('change', async (e) => {
+      const idx = parseInt(e.target.dataset.index, 10);
+      const color = e.target.value;
+      await fetch('/api/project/' + idx, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({color})});
+      await render();
+      await renderProjectSettings();
+    });
+  });
+  list.querySelectorAll('.project-up').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      const idx = parseInt(e.target.dataset.index, 10);
+      const targetPos = Math.max(0, idx - 1);
+      await fetch('/api/project/' + idx, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({position:targetPos})});
+      await render();
+      await renderProjectSettings();
+    });
+  });
+  list.querySelectorAll('.project-down').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      const idx = parseInt(e.target.dataset.index, 10);
+      const targetPos = idx + 1;
+      await fetch('/api/project/' + idx, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({position:targetPos})});
+      await render();
+      await renderProjectSettings();
+    });
+  });
+  list.querySelectorAll('.project-delete').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      const idx = parseInt(e.target.dataset.index, 10);
+      if(!confirm('Delete this project?')) return;
+      await fetch('/api/project/' + idx, {method:'DELETE'});
+      await render();
+      await renderProjectSettings();
+    });
+  });
+
+  refreshProjectInputs();
+}
+
+const projectPickerRegistry = new Map();
+let projectPickerDocListenerAttached = false;
+
+function getProjectNames(){
+  if(!latestBoard) return [];
+  const seen = new Set();
+  const names = [];
+  if(Array.isArray(latestBoard.projects)){
+    latestBoard.projects.forEach(proj => {
+      const name = proj && proj.name ? proj.name.trim() : '';
+      if(name && !seen.has(name)){
+        seen.add(name);
+        names.push(name);
+      }
+    });
+  }
+  if(Array.isArray(latestBoard.columns)){
+    latestBoard.columns.forEach(col => {
+      if(!Array.isArray(col.cards)) return;
+      col.cards.forEach(card => {
+        const projectName = card && card.project ? card.project.trim() : '';
+        if(projectName && !seen.has(projectName)){
+          seen.add(projectName);
+          names.push(projectName);
+        }
+      });
+    });
+  }
+  return names;
+}
+
+function populateProjectInput(inputEl, selectedValue){
+  if(!inputEl) return;
+  inputEl.value = selectedValue || '';
+  const state = projectPickerRegistry.get(inputEl.id);
+  if(state){
+    buildProjectPickerMenu(state);
+  }
+}
+
+function buildProjectPickerMenu(state){
+  if(!state) return;
+  const names = getProjectNames();
+  const filter = (state.input.value || '').trim().toLowerCase();
+  const ordered = [];
+  if(filter){
+    const matches = [];
+    const remainder = [];
+    names.forEach(name => {
+      const match = name.toLowerCase().includes(filter);
+      (match ? matches : remainder).push({name, match});
+    });
+    ordered.push(...matches, ...remainder);
+  } else {
+    names.forEach(name => ordered.push({name, match:false}));
+  }
+  state.menu.innerHTML = '';
+  if(!ordered.length){
+    const empty = document.createElement('div');
+    empty.className = 'project-option empty';
+    empty.textContent = 'No saved projects yet';
+    state.menu.appendChild(empty);
+    return;
+  }
+  ordered.forEach(item => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'project-option' + (item.match ? ' match' : '');
+    btn.textContent = item.name;
+    btn.addEventListener('click', () => {
+      state.input.value = item.name;
+      state.input.dispatchEvent(new Event('input', {bubbles:true}));
+      closeProjectPicker(state);
+      state.skipNextFocusOpen = true;
+      setTimeout(() => state.input.focus(), 0);
+    });
+    state.menu.appendChild(btn);
+  });
+}
+
+function openProjectPicker(state){
+  if(!state) return;
+  buildProjectPickerMenu(state);
+  state.menu.classList.remove('hidden');
+  state.toggle.setAttribute('aria-expanded', 'true');
+  state.open = true;
+}
+
+function closeProjectPicker(state){
+  if(!state) return;
+  state.menu.classList.add('hidden');
+  state.toggle.setAttribute('aria-expanded', 'false');
+  state.open = false;
+  state.suppressBlur = false;
+}
+
+function registerProjectPicker(inputId){
+  if(projectPickerRegistry.has(inputId)) return projectPickerRegistry.get(inputId);
+  const wrapper = document.querySelector(`.project-picker[data-project-input="${inputId}"]`);
+  const input = document.getElementById(inputId);
+  if(!wrapper || !input) return null;
+  const menu = wrapper.querySelector(`[data-project-menu="${inputId}"]`);
+  const toggle = wrapper.querySelector(`[data-project-toggle="${inputId}"]`);
+  if(!menu || !toggle) return null;
+  const state = {input, menu, toggle, wrapper, open:false, suppressBlur:false, skipNextFocusOpen:false};
+  projectPickerRegistry.set(inputId, state);
+
+  input.addEventListener('focus', () => {
+    if(state.skipNextFocusOpen){
+      state.skipNextFocusOpen = false;
+      return;
+    }
+    openProjectPicker(state);
+  });
+  input.addEventListener('input', () => {
+    buildProjectPickerMenu(state);
+    if(!state.open){
+      openProjectPicker(state);
+    }
+  });
+  input.addEventListener('keydown', (e) => {
+    if(e.key === 'ArrowDown'){
+      e.preventDefault();
+      openProjectPicker(state);
+      focusFirstProjectOption(state);
+    } else if(e.key === 'Escape'){
+      closeProjectPicker(state);
+    }
+  });
+  input.addEventListener('blur', () => {
+    if(state.suppressBlur) return;
+    setTimeout(() => {
+      if(!state.suppressBlur){
+        closeProjectPicker(state);
+      }
+    }, 120);
+  });
+
+  toggle.addEventListener('click', (e) => {
+    e.preventDefault();
+    if(state.open){
+      closeProjectPicker(state);
+    } else {
+      openProjectPicker(state);
+      input.focus();
+    }
+  });
+
+  menu.addEventListener('mousedown', (e) => {
+    state.suppressBlur = true;
+    e.stopPropagation();
+  });
+  menu.addEventListener('mouseup', (e) => {
+    e.stopPropagation();
+    setTimeout(() => {
+      state.suppressBlur = false;
+      input.focus();
+    }, 0);
+  });
+
+  if(!projectPickerDocListenerAttached){
+    document.addEventListener('mousedown', (evt) => {
+      projectPickerRegistry.forEach(pickerState => {
+        if(pickerState.open && !pickerState.wrapper.contains(evt.target)){
+          closeProjectPicker(pickerState);
+        }
+      });
+    });
+    projectPickerDocListenerAttached = true;
+  }
+
+  return state;
+}
+
+function focusFirstProjectOption(state){
+  if(!state || !state.menu) return;
+  const firstBtn = state.menu.querySelector('button.project-option');
+  if(firstBtn){
+    firstBtn.focus();
+  }
+}
+
+function refreshProjectInputs(){
+  projectPickerRegistry.forEach(state => buildProjectPickerMenu(state));
+}
+
+async function downloadBoardJson(){
+  try {
+    const res = await fetch('/api/board/export');
+    if(!res.ok){
+      throw new Error('Failed to download board');
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'kanban.json';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(()=>URL.revokeObjectURL(url), 0);
+  } catch(err){
+    console.error(err);
+    alert('Unable to download the board data.');
+  }
+}
+
+async function importBoardJson(){
+  const fileInput = document.getElementById('importFileInput');
+  if(!fileInput || !fileInput.files || !fileInput.files.length){
+    alert('Select a kanban.json file to import.');
+    return;
+  }
+  const modeInput = document.querySelector('input[name="importMode"]:checked');
+  const mode = modeInput ? modeInput.value : 'merge';
+  const confirmMsg = mode === 'replace'
+    ? 'Replace the current board with the selected file? This cannot be undone.'
+    : 'Merge the selected board into your current data?';
+  if(!confirm(confirmMsg)){
+    return;
+  }
+  const formData = new FormData();
+  formData.append('file', fileInput.files[0]);
+  formData.append('mode', mode);
+  try {
+    const res = await fetch('/api/board/import', {method:'POST', body: formData});
+    const payload = await res.json().catch(()=>({}));
+    if(!res.ok){
+      const message = payload && payload.error ? payload.error : 'Import failed';
+      alert(message);
+      return;
+    }
+    fileInput.value = '';
+    await render();
+    const activeTabBtn = document.querySelector('.settings-tab-btn.active');
+    if(activeTabBtn){
+      if(activeTabBtn.dataset.tab === 'projects'){
+        await renderProjectSettings();
+      } else if(activeTabBtn.dataset.tab === 'statuses'){
+        await renderStatusSettings();
+      }
+    }
+    alert('Import complete.');
+  } catch(err){
+    console.error(err);
+    alert('Unable to import the selected file.');
+  }
+}
+
+function activateSettingsTab(tabId){
+  const modal = document.getElementById('settingsModal');
+  if(!modal) return;
+  modal.querySelectorAll('.settings-tab-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === tabId);
+  });
+  modal.querySelectorAll('.settings-tab-panel').forEach(panel => {
+    panel.classList.toggle('active', panel.dataset.tab === tabId);
+  });
+  if(tabId === 'statuses'){
+    renderStatusSettings();
+  } else if(tabId === 'projects'){
+    renderProjectSettings();
+  }
+}
+
+function openSettingsModal(tabId){
+  const modal = document.getElementById('settingsModal');
+  if(!modal) return;
+  const modalContent = modal.querySelector('.modal-content');
+  const modalPurple = '#b78ef5';
+  if(modal.classList.contains('hidden')){
+    modal.classList.remove('hidden');
+    if(modalContent){
+      modalContent.style.borderColor = modalPurple;
+      modalContent.style.borderWidth = '2px';
+      modalContent.style.backgroundColor = '#0f0f18';
+    }
+  }
+  activateSettingsTab(tabId || 'statuses');
+}
+
+function closeSettingsModal(){
+  const modal = document.getElementById('settingsModal');
+  if(!modal) return;
+  const modalContent = modal.querySelector('.modal-content');
+  if(modalContent){
+    modalContent.style.borderColor = '';
+    modalContent.style.borderWidth = '';
+    modalContent.style.backgroundColor = '';
+  }
+  modal.classList.add('hidden');
+}
+
+function focusProjectInSettings(projectName){
+  if(!projectName) return;
+  let attempts = 0;
+  const tryFocus = () => {
+    const list = document.getElementById('projectsList');
+    if(list){
+      const inputs = Array.from(list.querySelectorAll('.project-name'));
+      const target = inputs.find(inp => inp.value.trim() === projectName.trim());
+      if(target){
+        target.focus();
+        target.select();
+        return;
+      }
+    }
+    attempts += 1;
+    if(attempts < 5){
+      setTimeout(tryFocus, 120);
+    }
+  };
+  tryFocus();
+}
+
+document.querySelectorAll('.settings-tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    activateSettingsTab(btn.dataset.tab);
+  });
+});
+
+document.getElementById('truncateBtn').addEventListener('click', ()=>{
+  cardTruncationEnabled = !cardTruncationEnabled;
+  localStorage.setItem('cardTruncationEnabled', cardTruncationEnabled);
+  const btn = document.getElementById('truncateBtn');
+  btn.setAttribute('aria-pressed', cardTruncationEnabled ? 'true' : 'false');
+  btn.classList.toggle('active', cardTruncationEnabled);
+  render({useLatest: true});
+});
+
+document.getElementById('settingsBtn').addEventListener('click', ()=>{
+  const modal = document.getElementById('settingsModal');
+  if(modal.classList.contains('hidden')){
+    openSettingsModal('statuses');
+  } else {
+    closeSettingsModal();
+  }
+});
+document.getElementById('closeSettings').addEventListener('click', ()=>{
+  closeSettingsModal();
+});
+document.getElementById('addColumnBtn').addEventListener('click', async ()=>{
+  const title = document.getElementById('newColumnTitle').value.trim();
+  const color = document.getElementById('newColumnColor').value;
+  if(!title) return alert('title required');
+  await fetch('/api/column', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title, color})});
+  document.getElementById('newColumnTitle').value = '';
+  document.getElementById('newColumnColor').value = '#9aa0a6';
+  render();
+  renderStatusSettings();
+});
+
+document.getElementById('addProjectBtn').addEventListener('click', async ()=>{
+  const name = document.getElementById('newProjectName').value.trim();
+  const color = document.getElementById('newProjectColor').value;
+  if(!name) return alert('name required');
+  await fetch('/api/project', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name, color})});
+  document.getElementById('newProjectName').value = '';
+  document.getElementById('newProjectColor').value = '#5b2e8a';
+  await render();
+  await renderProjectSettings();
+});
+
+document.getElementById('downloadBoardBtn').addEventListener('click', ()=>{
+  downloadBoardJson();
+});
+document.getElementById('importBoardBtn').addEventListener('click', ()=>{
+  importBoardJson();
+});
+
+// close modal when clicking backdrop
+document.addEventListener('click', (e)=>{
+  const modal = document.getElementById('settingsModal');
+  if(modal && e.target.classList.contains('modal-backdrop') && modal.contains(e.target)) closeSettingsModal();
+  // card modal backdrop
+  const cardModal = document.getElementById('cardModal');
+  if(cardModal && e.target.classList.contains('modal-backdrop')) cardModal.classList.add('hidden');
+  // card edit modal backdrop
+  const cardEditModal = document.getElementById('cardEditModal');
+  if(cardEditModal && e.target.classList.contains('modal-backdrop')) cardEditModal.classList.add('hidden');
+});
+
+// Card edit modal
+const cardEditModal = document.createElement('div');
+cardEditModal.id = 'cardEditModal';
+cardEditModal.className = 'modal hidden';
+cardEditModal.innerHTML = `
+  <div class="modal-backdrop"></div>
+  <div class="modal-content">
+    <h2 id="editCardModalTitle">Edit Task</h2>
+    <div class="card-form">
+      <label>Title:</label>
+      <input id="editCardTitle" placeholder="Card title" />
+      <label>Project:</label>
+      <div class="project-picker" data-project-input="editCardProject">
+        <input id="editCardProject" class="modal-input project-input" placeholder="Select or type a project" autocomplete="off" />
+        <button type="button" class="project-picker-toggle" data-project-toggle="editCardProject" aria-label="Show saved projects">▼</button>
+        <div class="project-picker-dropdown hidden" data-project-menu="editCardProject"></div>
+      </div>
+      <label>Description:</label>
+      <textarea id="editCardDesc" placeholder="Description (optional)"></textarea>
+      <div class="links-section">
+        <div class="links-header">
+          <span>Links</span>
+          <button type="button" id="addLinkRowBtn">+ Link</button>
+        </div>
+        <div id="linkRowsContainer" class="link-rows"></div>
+        <small class="link-hint">Add shortcuts to docs, tickets, or other resources. Leave both fields empty to remove a row.</small>
+      </div>
+      <div class="modal-actions"><button id="editCardSaveBtn">Save</button> <button id="editCardDuplicateBtn" style="display:none">Duplicate</button> <button id="editCardDeleteBtn" class="delete-btn" style="display:none">Delete</button> <button id="editCardCancelBtn">Cancel</button></div>
+    </div>
+  </div>
+`;
+document.body.appendChild(cardEditModal);
+registerProjectPicker('editCardProject');
+
+function createLinkRowElement(link){
+  const row = document.createElement('div');
+  row.className = 'link-row';
+  row.innerHTML = `
+    <input class="link-text" placeholder="Display text" />
+    <input class="link-url" placeholder="https://example.com" />
+    <a class="link-visit" target="_blank" rel="noopener noreferrer">Visit</a>
+    <button type="button" class="link-remove">✕</button>
+  `;
+  const textValue = link && link.text ? link.text : '';
+  const urlValue = link && link.url ? link.url : '';
+  row.querySelector('.link-text').value = textValue;
+  row.querySelector('.link-url').value = urlValue;
+  const visitAnchor = row.querySelector('.link-visit');
+  const updateVisitState = () => {
+    const currentUrl = row.querySelector('.link-url').value.trim();
+    if(currentUrl){
+      visitAnchor.classList.remove('disabled');
+      visitAnchor.href = currentUrl;
+    } else {
+      visitAnchor.classList.add('disabled');
+      visitAnchor.removeAttribute('href');
+    }
+  };
+  updateVisitState();
+  row.querySelector('.link-url').addEventListener('input', updateVisitState);
+  row.querySelector('.link-remove').addEventListener('click', () => {
+    row.remove();
+    const container = document.getElementById('linkRowsContainer');
+    if(container && !container.querySelector('.link-row')){
+      container.appendChild(createLinkRowElement({}));
+    }
+  });
+  return row;
+}
+
+function renderLinkRows(links){
+  const container = document.getElementById('linkRowsContainer');
+  if(!container) return;
+  container.innerHTML = '';
+  if(links && links.length){
+    links.forEach(link => container.appendChild(createLinkRowElement(link)));
+  } else {
+    container.appendChild(createLinkRowElement({}));
+  }
+}
+
+function collectLinkRows(){
+  const container = document.getElementById('linkRowsContainer');
+  if(!container) return [];
+  const links = [];
+  container.querySelectorAll('.link-row').forEach(row => {
+    const text = row.querySelector('.link-text').value.trim();
+    const url = row.querySelector('.link-url').value.trim();
+    if(!text && !url) return;
+    if(!url) return;
+    links.push({text: text || url, url});
+  });
+  return links;
+}
+
+document.getElementById('addLinkRowBtn').addEventListener('click', () => {
+  const container = document.getElementById('linkRowsContainer');
+  if(container){
+    container.appendChild(createLinkRowElement({}));
+  }
+});
+async function openCardEditModal(card, isNew = false){
+  if(!latestBoard){
+    await fetchBoard();
+  }
+  const modal = document.getElementById('cardEditModal');
+  modal.dataset.cardId = card.id;
+  modal.dataset.isNew = isNew;
+  document.getElementById('editCardTitle').value = card.title || '';
+  document.getElementById('editCardDesc').value = card.description || '';
+  const editProjectInput = document.getElementById('editCardProject');
+  populateProjectInput(editProjectInput, card.project || '');
+  renderLinkRows(card.links || []);
+
+  // Update title with more prominent styling
+  const titleEl = document.getElementById('editCardModalTitle');
+  if(isNew){
+    titleEl.textContent = '✨ New Task';
+    titleEl.style.color = '#4ade80';
+    titleEl.style.padding = '8px 12px';
+    titleEl.style.backgroundColor = 'rgba(74, 222, 128, 0.1)';
+    titleEl.style.borderRadius = '6px';
+    titleEl.style.display = 'inline-block';
+    document.getElementById('editCardDuplicateBtn').style.display = 'none';
+    document.getElementById('editCardDeleteBtn').style.display = 'none';
+  } else {
+    titleEl.textContent = 'Edit Task';
+    titleEl.style.color = '';
+    titleEl.style.padding = '';
+    titleEl.style.backgroundColor = '';
+    titleEl.style.borderRadius = '';
+    titleEl.style.display = '';
+    document.getElementById('editCardDuplicateBtn').style.display = 'inline-block';
+    document.getElementById('editCardDeleteBtn').style.display = 'inline-block';
+  }
+
+  // apply purple styling to modal
+  const modalContent = modal.querySelector('.modal-content');
+  const modalPurple = '#b78ef5';
+  if(modalContent){
+    modalContent.style.borderColor = modalPurple;
+    modalContent.style.borderWidth = '2px';
+    modalContent.style.backgroundColor = '#0f0f18';
+  }
+
+  modal.classList.remove('hidden');
+  document.getElementById('editCardTitle').focus();
+}
+function closeCardEditModal(){
+  const modal = document.getElementById('cardEditModal');
+  const modalContent = modal.querySelector('.modal-content');
+  if(modalContent){
+    modalContent.style.borderColor = '';
+    modalContent.style.borderWidth = '';
+    modalContent.style.backgroundColor = '';
+  }
+  modal.classList.add('hidden');
+}
+
+document.getElementById('editCardCancelBtn').addEventListener('click', ()=>{ closeCardEditModal(); });
+document.getElementById('editCardDeleteBtn').addEventListener('click', async ()=>{
+  if(!confirm('Delete this task?')) return;
+  const modal = document.getElementById('cardEditModal');
+  const cardId = modal.dataset.cardId;
+  await fetch('/api/card/' + cardId, {method:'DELETE'});
+  closeCardEditModal();
+  render();
+});
+document.getElementById('editCardDuplicateBtn').addEventListener('click', async ()=>{
+  const modal = document.getElementById('cardEditModal');
+  const originalCardId = modal.dataset.cardId;
+  const title = document.getElementById('editCardTitle').value.trim();
+  const description = document.getElementById('editCardDesc').value.trim();
+  if(!title) return alert('title required');
+  const links = collectLinkRows();
+  const project = document.getElementById('editCardProject').value;
+  
+  // Find the column of the original card
+  const board = await fetchBoard();
+  let columnId = null;
+  for(const col of board.columns){
+    for(const card of col.cards){
+      if(card.id === originalCardId){
+        columnId = col.id;
+        break;
+      }
+    }
+    if(columnId) break;
+  }
+  
+  if(!columnId) return alert('Could not find column for duplicate');
+  
+  // Create new card with duplicated data
+  try {
+    const res = await fetch('/api/card', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({title, description, links, project, column: columnId})});
+    if(!res.ok) throw new Error('Failed to create card');
+    const newCard = await res.json();
+    if(!newCard || !newCard.id) throw new Error('No ID returned for new card');
+    
+    // Open the new card for editing
+    await openCardEditModal(newCard, true);
+  } catch(err) {
+    alert('Error duplicating card: ' + err.message);
+  }
+});
+document.getElementById('editCardSaveBtn').addEventListener('click', async ()=>{
+  const modal = document.getElementById('cardEditModal');
+  const cardId = modal.dataset.cardId;
+  const title = document.getElementById('editCardTitle').value.trim();
+  const description = document.getElementById('editCardDesc').value.trim();
+  if(!title) return alert('title required');
+  const links = collectLinkRows();
+  const project = document.getElementById('editCardProject').value;
+  try {
+    const res = await fetch('/api/card/' + cardId, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({title, description, links, project})});
+    if(!res.ok) throw new Error('Failed to save card');
+    closeCardEditModal();
+    render();
+  } catch(err) {
+    alert('Error saving card: ' + err.message);
+  }
+});
+
+// Card modal (new task)
+const cardModal = document.createElement('div');
+cardModal.id = 'cardModal';
+cardModal.className = 'modal hidden';
+cardModal.innerHTML = `
+  <div class="modal-backdrop"></div>
+  <div class="modal-content">
+    <h2>New Task</h2>
+    <div class="card-form">
+      <label>Status: <select id="cardColumnSelect" class="modal-input"></select></label>
+      <label>Project:</label>
+      <div class="project-picker" data-project-input="cardProjectInput">
+        <input id="cardProjectInput" class="modal-input project-input" placeholder="Select or type a project" autocomplete="off" />
+        <button type="button" class="project-picker-toggle" data-project-toggle="cardProjectInput" aria-label="Show saved projects">▼</button>
+        <div class="project-picker-dropdown hidden" data-project-menu="cardProjectInput"></div>
+      </div>
+      <input id="cardTitle" placeholder="Card title" />
+      <textarea id="cardDesc" placeholder="Description (optional)"></textarea>
+      <div class="modal-actions"><button id="cardAddBtn">Add</button> <button id="cardCancelBtn">Cancel</button></div>
+    </div>
+  </div>
+`;
+document.body.appendChild(cardModal);
+registerProjectPicker('cardProjectInput');
+
+async function openCardModal(columnId){
+  const modal = document.getElementById('cardModal');
+  modal.dataset.column = columnId;
+  const board = await fetchBoard();
+  const sel = document.getElementById('cardColumnSelect');
+  sel.innerHTML = '';
+  board.columns.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = c.title;
+    sel.appendChild(opt);
+  });
+  sel.value = columnId;
+  const createProjectInput = document.getElementById('cardProjectInput');
+  populateProjectInput(createProjectInput, '');
+
+  const modalContent = modal.querySelector('.modal-content');
+  const modalPurple = '#b78ef5';
+  if(modalContent){
+    modalContent.style.borderColor = modalPurple;
+    modalContent.style.borderWidth = '2px';
+    modalContent.style.backgroundColor = '#0f0f18';
+  }
+
+  modal.classList.remove('hidden');
+  document.getElementById('cardTitle').value = '';
+  document.getElementById('cardDesc').value = '';
+  document.getElementById('cardTitle').focus();
+}
+function closeCardModal(){
+  const modal = document.getElementById('cardModal');
+  const modalContent = modal.querySelector('.modal-content');
+  if(modalContent){
+    modalContent.style.borderColor = '';
+    modalContent.style.borderWidth = '';
+    modalContent.style.backgroundColor = '';
+  }
+  modal.classList.add('hidden');
+}
+
+document.getElementById('cardCancelBtn').addEventListener('click', ()=>{ closeCardModal(); });
+document.getElementById('cardAddBtn').addEventListener('click', async ()=>{
+  const modal = document.getElementById('cardModal');
+  const column = document.getElementById('cardColumnSelect').value || modal.dataset.column;
+  const title = document.getElementById('cardTitle').value.trim();
+  const description = document.getElementById('cardDesc').value.trim();
+  const project = document.getElementById('cardProjectInput').value;
+  if(!title) return alert('title required');
+  await fetch('/api/card', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title, description, column, project})});
+  closeCardModal();
+  render();
+});
+
+// keyboard: ESC closes modals
+document.addEventListener('keydown', (e)=>{
+  if(e.key === 'Escape'){
+    const cm = document.getElementById('cardModal');
+    if(cm && !cm.classList.contains('hidden')) cm.classList.add('hidden');
+    const cem = document.getElementById('cardEditModal');
+    if(cem && !cem.classList.contains('hidden')) cem.classList.add('hidden');
+  }
+});
+
+// Apply initial truncation state to button
+const truncateBtn = document.getElementById('truncateBtn');
+if(cardTruncationEnabled){
+  truncateBtn.setAttribute('aria-pressed', 'true');
+  truncateBtn.classList.add('active');
+}
+
+// Initial render
+render();
