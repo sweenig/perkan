@@ -188,6 +188,7 @@ projectPreview.addEventListener('click', (e) => {
 function createCardElement(card, projectMap) {
   const linkCount = Array.isArray(card.links) ? card.links.length : 0;
   const projectName = card.project || '';
+  const assignee = card.assignee || '';
   const projectDetails = projectMap && projectMap.get(projectName);
   const projectColor = projectDetails && projectDetails.color ? projectDetails.color : null;
   const el = document.createElement('div');
@@ -202,7 +203,12 @@ function createCardElement(card, projectMap) {
         ${linkCount > 0 ? `<div class="card-links" title="${linkCount} link${linkCount!==1?'s':''}">🔗 ${linkCount}</div>` : ''}
       </div>
       <div class="card-footer-center">
-        ${projectName ? `<div class="card-project" title="Project: ${escapeHtml(projectName)}">${escapeHtml(projectName)}</div>` : ''}
+        ${projectName || assignee ? `
+          <div class="card-footer-center-meta">
+            ${projectName ? `<div class="card-project" title="Project: ${escapeHtml(projectName)}">${escapeHtml(projectName)}</div>` : ''}
+            ${assignee ? `<div class="card-assignee" title="Assignee: ${escapeHtml(assignee)}">👤 ${escapeHtml(assignee)}</div>` : ''}
+          </div>
+        ` : ''}
       </div>
       <div class="card-footer-right">
         <button class="edit" title="Edit card">✏️</button>
@@ -1064,6 +1070,8 @@ cardEditModal.innerHTML = `
         <button type="button" class="project-picker-toggle" data-project-toggle="editCardProject" aria-label="Show saved projects">▼</button>
         <div class="project-picker-dropdown hidden" data-project-menu="editCardProject"></div>
       </div>
+      <label>Assignee:</label>
+      <input id="editCardAssignee" class="modal-input" placeholder="Assignee (optional)" />
       <label>Description:</label>
       <textarea id="editCardDesc" placeholder="Description (optional)"></textarea>
       <div class="links-section">
@@ -1157,6 +1165,7 @@ async function openCardEditModal(card, isNew = false){
   modal.dataset.isNew = isNew;
   document.getElementById('editCardTitle').value = card.title || '';
   document.getElementById('editCardDesc').value = card.description || '';
+  document.getElementById('editCardAssignee').value = card.assignee || '';
   const editProjectInput = document.getElementById('editCardProject');
   populateProjectInput(editProjectInput, card.project || '');
   renderLinkRows(card.links || []);
@@ -1220,6 +1229,7 @@ document.getElementById('editCardDuplicateBtn').addEventListener('click', async 
   const originalCardId = modal.dataset.cardId;
   const title = document.getElementById('editCardTitle').value.trim();
   const description = document.getElementById('editCardDesc').value.trim();
+  const assignee = document.getElementById('editCardAssignee').value.trim();
   if(!title) return alert('title required');
   const links = collectLinkRows();
   const project = document.getElementById('editCardProject').value;
@@ -1241,7 +1251,7 @@ document.getElementById('editCardDuplicateBtn').addEventListener('click', async 
   
   // Create new card with duplicated data
   try {
-    const res = await fetch('/api/card', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({title, description, links, project, column: columnId})});
+    const res = await fetch('/api/card', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({title, description, links, project, assignee, column: columnId})});
     if(!res.ok) throw new Error('Failed to create card');
     const newCard = await res.json();
     if(!newCard || !newCard.id) throw new Error('No ID returned for new card');
@@ -1257,11 +1267,12 @@ document.getElementById('editCardSaveBtn').addEventListener('click', async ()=>{
   const cardId = modal.dataset.cardId;
   const title = document.getElementById('editCardTitle').value.trim();
   const description = document.getElementById('editCardDesc').value.trim();
+  const assignee = document.getElementById('editCardAssignee').value.trim();
   if(!title) return alert('title required');
   const links = collectLinkRows();
   const project = document.getElementById('editCardProject').value;
   try {
-    const res = await fetch('/api/card/' + cardId, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({title, description, links, project})});
+    const res = await fetch('/api/card/' + cardId, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({title, description, links, project, assignee})});
     if(!res.ok) throw new Error('Failed to save card');
     closeCardEditModal();
     render();
@@ -1286,6 +1297,8 @@ cardModal.innerHTML = `
         <button type="button" class="project-picker-toggle" data-project-toggle="cardProjectInput" aria-label="Show saved projects">▼</button>
         <div class="project-picker-dropdown hidden" data-project-menu="cardProjectInput"></div>
       </div>
+      <label>Assignee:</label>
+      <input id="cardAssigneeInput" class="modal-input" placeholder="Assignee (optional)" />
       <input id="cardTitle" placeholder="Card title" />
       <textarea id="cardDesc" placeholder="Description (optional)"></textarea>
       <div class="modal-actions"><button id="cardAddBtn">Add</button> <button id="cardCancelBtn">Cancel</button></div>
@@ -1322,6 +1335,7 @@ async function openCardModal(columnId){
   modal.classList.remove('hidden');
   document.getElementById('cardTitle').value = '';
   document.getElementById('cardDesc').value = '';
+  document.getElementById('cardAssigneeInput').value = '';
   document.getElementById('cardTitle').focus();
 }
 function closeCardModal(){
@@ -1341,9 +1355,10 @@ document.getElementById('cardAddBtn').addEventListener('click', async ()=>{
   const column = document.getElementById('cardColumnSelect').value || modal.dataset.column;
   const title = document.getElementById('cardTitle').value.trim();
   const description = document.getElementById('cardDesc').value.trim();
+  const assignee = document.getElementById('cardAssigneeInput').value.trim();
   const project = document.getElementById('cardProjectInput').value;
   if(!title) return alert('title required');
-  await fetch('/api/card', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title, description, column, project})});
+  await fetch('/api/card', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title, description, assignee, column, project})});
   closeCardModal();
   render();
 });

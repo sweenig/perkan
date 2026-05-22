@@ -44,6 +44,9 @@ def _sanitize_card(card):
     project_name = (card.get('project') or '').strip()
     if project_name:
         sanitized['project'] = project_name
+    assignee = (card.get('assignee') or '').strip()
+    if assignee:
+        sanitized['assignee'] = assignee
     color = card.get('color')
     sanitized['color'] = color if color else DEFAULT_CARD_COLOR
     return sanitized
@@ -314,6 +317,7 @@ def create_card():
     color = data.get('color')
     hidden = data.get('hidden')
     project_name = (data.get('project') or '').strip()
+    assignee = (data.get('assignee') or '').strip()
     links = _clean_links(data.get('links'))
     if not title:
         return jsonify({'error': 'title required'}), 400
@@ -325,6 +329,8 @@ def create_card():
         'description': description,
         'links': links
     }
+    if assignee:
+        card['assignee'] = assignee
     project_details = None
     if project_name:
         project_details = _ensure_project(board, project_name)
@@ -355,6 +361,7 @@ def update_card(card_id):
     color = data.get('color')
     links = data.get('links')
     project_payload = data.get('project') if 'project' in data else None
+    assignee_payload = data.get('assignee') if 'assignee' in data else None
 
     board = _load_data()
     # find and remove card from any column
@@ -393,6 +400,12 @@ def update_card(card_id):
             card_obj.pop('project', None)
             if color is None:
                 card_obj['color'] = DEFAULT_CARD_COLOR
+    if assignee_payload is not None:
+        normalized_assignee = (assignee_payload or '').strip()
+        if normalized_assignee:
+            card_obj['assignee'] = normalized_assignee
+        else:
+            card_obj.pop('assignee', None)
     if links is not None:
         card_obj['links'] = _clean_links(links)
 
