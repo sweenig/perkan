@@ -1051,6 +1051,9 @@ document.addEventListener('click', (e)=>{
   // card edit modal backdrop
   const cardEditModal = document.getElementById('cardEditModal');
   if(cardEditModal && e.target.classList.contains('modal-backdrop')) cardEditModal.classList.add('hidden');
+  // split task modal backdrop
+  const splitTaskModal = document.getElementById('splitTaskModal');
+  if(splitTaskModal && e.target.classList.contains('modal-backdrop')) closeSplitTaskModal();
 });
 
 // Card edit modal
@@ -1082,7 +1085,7 @@ cardEditModal.innerHTML = `
         <div id="linkRowsContainer" class="link-rows"></div>
         <small class="link-hint">Add shortcuts to docs, tickets, or other resources. Leave both fields empty to remove a row.</small>
       </div>
-      <div class="modal-actions"><button id="editCardSaveBtn">Save</button> <button id="editCardDuplicateBtn" style="display:none">Duplicate</button> <button id="editCardDeleteBtn" class="delete-btn" style="display:none">Delete</button> <button id="editCardCancelBtn">Cancel</button></div>
+      <div class="modal-actions"><button id="editCardSaveBtn">Save</button> <button id="editCardSplitBtn" style="display:none" title="Split this task into two">Split</button> <button id="editCardDuplicateBtn" style="display:none">Duplicate</button> <button id="editCardDeleteBtn" class="delete-btn" style="display:none">Delete</button> <button id="editCardCancelBtn">Cancel</button></div>
     </div>
   </div>
 `;
@@ -1181,6 +1184,7 @@ async function openCardEditModal(card, isNew = false){
     titleEl.style.display = 'inline-block';
     document.getElementById('editCardDuplicateBtn').style.display = 'none';
     document.getElementById('editCardDeleteBtn').style.display = 'none';
+    document.getElementById('editCardSplitBtn').style.display = 'none';
   } else {
     titleEl.textContent = 'Edit Task';
     titleEl.style.color = '';
@@ -1190,6 +1194,7 @@ async function openCardEditModal(card, isNew = false){
     titleEl.style.display = '';
     document.getElementById('editCardDuplicateBtn').style.display = 'inline-block';
     document.getElementById('editCardDeleteBtn').style.display = 'inline-block';
+    document.getElementById('editCardSplitBtn').style.display = 'inline-block';
   }
 
   // apply purple styling to modal
@@ -1278,6 +1283,201 @@ document.getElementById('editCardSaveBtn').addEventListener('click', async ()=>{
     render();
   } catch(err) {
     alert('Error saving card: ' + err.message);
+  }
+});
+
+// Split task modal
+const splitTaskModal = document.createElement('div');
+splitTaskModal.id = 'splitTaskModal';
+splitTaskModal.className = 'modal hidden';
+splitTaskModal.innerHTML = `
+  <div class="modal-backdrop"></div>
+  <div class="split-modal-content">
+    <h2>Split Task</h2>
+    <div class="split-container">
+      <div class="split-pane split-left">
+        <h3>Original Task</h3>
+        <div class="card-form">
+          <label>Title:</label>
+          <input id="splitOriginalTitle" placeholder="Card title" />
+          <label>Project:</label>
+          <div class="project-picker" data-project-input="splitOriginalProject">
+            <input id="splitOriginalProject" class="modal-input project-input" placeholder="Select or type a project" autocomplete="off" />
+            <button type="button" class="project-picker-toggle" data-project-toggle="splitOriginalProject" aria-label="Show saved projects">▼</button>
+            <div class="project-picker-dropdown hidden" data-project-menu="splitOriginalProject"></div>
+          </div>
+          <label>Assignee:</label>
+          <input id="splitOriginalAssignee" class="modal-input" placeholder="Assignee (optional)" />
+          <label>Description:</label>
+          <textarea id="splitOriginalDesc" placeholder="Description (optional)"></textarea>
+        </div>
+      </div>
+      <div class="split-pane split-right">
+        <h3>New Task</h3>
+        <div class="card-form">
+          <label>Title:</label>
+          <input id="splitNewTitle" placeholder="Card title" />
+          <label>Project:</label>
+          <div class="project-picker" data-project-input="splitNewProject">
+            <input id="splitNewProject" class="modal-input project-input" placeholder="Select or type a project" autocomplete="off" />
+            <button type="button" class="project-picker-toggle" data-project-toggle="splitNewProject" aria-label="Show saved projects">▼</button>
+            <div class="project-picker-dropdown hidden" data-project-menu="splitNewProject"></div>
+          </div>
+          <label>Assignee:</label>
+          <input id="splitNewAssignee" class="modal-input" placeholder="Assignee (optional)" />
+          <label>Description:</label>
+          <textarea id="splitNewDesc" placeholder="Description (optional)"></textarea>
+        </div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button id="splitTaskSaveBtn">Save Both</button>
+      <button id="splitTaskCancelBtn">Cancel</button>
+    </div>
+  </div>
+`;
+document.body.appendChild(splitTaskModal);
+registerProjectPicker('splitOriginalProject');
+registerProjectPicker('splitNewProject');
+
+function closeSplitTaskModal(){
+  const modal = document.getElementById('splitTaskModal');
+  const modalContent = modal.querySelector('.split-modal-content');
+  if(modalContent){
+    modalContent.style.borderColor = '';
+    modalContent.style.borderWidth = '';
+    modalContent.style.backgroundColor = '';
+  }
+  modal.classList.add('hidden');
+}
+
+async function openSplitTaskModal(card){
+  if(!latestBoard){
+    await fetchBoard();
+  }
+  const modal = document.getElementById('splitTaskModal');
+  modal.dataset.cardId = card.id;
+  
+  // Populate original task fields (read-only feel but actually editable)
+  document.getElementById('splitOriginalTitle').value = card.title || '';
+  document.getElementById('splitOriginalDesc').value = card.description || '';
+  document.getElementById('splitOriginalAssignee').value = card.assignee || '';
+  const origProjectInput = document.getElementById('splitOriginalProject');
+  populateProjectInput(origProjectInput, card.project || '');
+  
+  // Populate new task fields with same content as original
+  document.getElementById('splitNewTitle').value = card.title || '';
+  document.getElementById('splitNewDesc').value = card.description || '';
+  document.getElementById('splitNewAssignee').value = card.assignee || '';
+  const newProjectInput = document.getElementById('splitNewProject');
+  populateProjectInput(newProjectInput, card.project || '');
+  
+  // Apply purple styling to modal
+  const modalContent = modal.querySelector('.split-modal-content');
+  const modalPurple = '#b78ef5';
+  if(modalContent){
+    modalContent.style.borderColor = modalPurple;
+    modalContent.style.borderWidth = '2px';
+    modalContent.style.backgroundColor = '#0f0f18';
+  }
+  
+  modal.classList.remove('hidden');
+  document.getElementById('splitNewTitle').focus();
+}
+
+document.getElementById('editCardSplitBtn').addEventListener('click', async ()=>{
+  const modal = document.getElementById('cardEditModal');
+  const cardId = modal.dataset.cardId;
+  const board = await fetchBoard();
+  
+  // Find the card
+  let card = null;
+  for(const col of board.columns){
+    for(const c of col.cards){
+      if(c.id === cardId){
+        card = c;
+        break;
+      }
+    }
+    if(card) break;
+  }
+  
+  if(!card) return alert('Could not find card');
+  
+  // Close the edit modal and open split modal
+  closeCardEditModal();
+  await openSplitTaskModal(card);
+});
+
+document.getElementById('splitTaskCancelBtn').addEventListener('click', ()=>{ closeSplitTaskModal(); });
+
+document.getElementById('splitTaskSaveBtn').addEventListener('click', async ()=>{
+  const modal = document.getElementById('splitTaskModal');
+  const cardId = modal.dataset.cardId;
+  
+  // Get original task data
+  const origTitle = document.getElementById('splitOriginalTitle').value.trim();
+  const origDesc = document.getElementById('splitOriginalDesc').value.trim();
+  const origAssignee = document.getElementById('splitOriginalAssignee').value.trim();
+  const origProject = document.getElementById('splitOriginalProject').value;
+  
+  // Get new task data
+  const newTitle = document.getElementById('splitNewTitle').value.trim();
+  const newDesc = document.getElementById('splitNewDesc').value.trim();
+  const newAssignee = document.getElementById('splitNewAssignee').value.trim();
+  const newProject = document.getElementById('splitNewProject').value;
+  
+  if(!origTitle) return alert('Original task title required');
+  if(!newTitle) return alert('New task title required');
+  
+  try {
+    // Update the original card
+    const updateRes = await fetch('/api/card/' + cardId, {
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        title: origTitle,
+        description: origDesc,
+        assignee: origAssignee,
+        project: origProject,
+        links: []
+      })
+    });
+    if(!updateRes.ok) throw new Error('Failed to update original card');
+    
+    // Find the column of the original card to place the new card in the same column
+    const board = await fetchBoard();
+    let columnId = null;
+    for(const col of board.columns){
+      for(const card of col.cards){
+        if(card.id === cardId){
+          columnId = col.id;
+          break;
+        }
+      }
+      if(columnId) break;
+    }
+    
+    if(!columnId) throw new Error('Could not find column for new card');
+    
+    // Create the new card
+    const createRes = await fetch('/api/card', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        title: newTitle,
+        description: newDesc,
+        assignee: newAssignee,
+        project: newProject,
+        column: columnId
+      })
+    });
+    if(!createRes.ok) throw new Error('Failed to create new card');
+    
+    closeSplitTaskModal();
+    render();
+  } catch(err) {
+    alert('Error splitting task: ' + err.message);
   }
 });
 
@@ -1370,6 +1570,8 @@ document.addEventListener('keydown', (e)=>{
     if(cm && !cm.classList.contains('hidden')) cm.classList.add('hidden');
     const cem = document.getElementById('cardEditModal');
     if(cem && !cem.classList.contains('hidden')) cem.classList.add('hidden');
+    const stm = document.getElementById('splitTaskModal');
+    if(stm && !stm.classList.contains('hidden')) closeSplitTaskModal();
   }
 });
 

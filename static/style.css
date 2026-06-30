@@ -129,3 +129,23 @@ header{display:flex;flex-direction:column;gap:10px;padding:14px 20px;background:
 #importFileInput{width:100%;padding:8px;border-radius:6px;border:1px solid #563baf;background:#1b1b25;color:#f4f6f8;box-sizing:border-box}
 .import-mode{display:flex;flex-direction:column;gap:6px;font-size:13px;color:rgba(255,255,255,0.85);margin-top:10px}
 .import-actions{margin-top:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+
+/* Split Task Modal */
+.split-modal-content{position:relative;background:#0f0f18;padding:18px;border-radius:8px;z-index:2;min-width:90%;max-width:1200px;width:1000px;border:2px solid transparent;box-shadow:0 12px 30px rgba(0,0,0,0.45);display:flex;flex-direction:column;max-height:85vh;overflow-y:auto}
+.split-modal-content h2{margin-top:0;margin-bottom:20px;color:#f4f6f8}
+.split-container{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:20px;min-height:0;overflow-y:auto}
+.split-pane{display:flex;flex-direction:column;min-height:0;padding-right:12px;overflow-y:auto}
+.split-pane h3{margin-top:0;margin-bottom:16px;color:#8bb9ff;font-size:16px;border-bottom:1px solid rgba(183,142,245,0.3);padding-bottom:8px}
+.split-pane .card-form{display:flex;flex-direction:column;gap:8px}
+.split-pane label{display:block;margin-top:8px;font-weight:600;color:#f4f6f8;font-size:14px}
+.split-pane input,.split-pane textarea,.split-pane select{width:100%;padding:8px;border:1px solid #555;border-radius:6px;background:#1b1b25;color:#f4f6f8;font-family:inherit;box-sizing:border-box}
+.split-pane input:focus,.split-pane textarea:focus{outline:none;border-color:#8bb9ff;box-shadow:0 0 0 2px rgba(139,185,255,0.1)}
+.split-pane textarea{min-height:120px;resize:vertical}
+
+/* Scrollbar for split panes */
+.split-pane::-webkit-scrollbar{width:8px}
+.split-pane::-webkit-scrollbar-track{background:transparent}
+.split-pane::-webkit-scrollbar-thumb{background:rgba(183,142,245,0.3);border-radius:4px}
+.split-pane::-webkit-scrollbar-thumb:hover{background:rgba(183,142,245,0.5)}
+
+.split-modal-content .modal-actions{margin-top:20px;padding-top:16px;border-top:1px solid rgba(183,142,245,0.2);display:flex;justify-content:flex-end;gap:8px;flex-shrink:0}
