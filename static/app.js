@@ -274,10 +274,28 @@ projectPreview.addEventListener('click', (e) => {
   }
 });
 
+function formatDueDateBadge(card){
+  if(!card.due_date) return '';
+  const isAllDay = !!card.all_day;
+  const d = new Date(isAllDay ? card.due_date + 'T00:00:00' : card.due_date);
+  if(isNaN(d.getTime())) return '';
+  const now = new Date();
+  const overdue = isAllDay
+    ? d < new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    : d < now;
+  const label = isAllDay
+    ? d.toLocaleDateString(undefined, {month:'short', day:'numeric'})
+    : d.toLocaleString(undefined, {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
+  const gcalIcon = card.gcal_event_id ? ' 🔗' : '';
+  return `<div class="card-due${overdue ? ' card-due-overdue' : ''}" title="Due ${escapeHtml(label)}${card.gcal_event_id ? ' (synced to Google Calendar)' : ''}">📅 ${escapeHtml(label)}${gcalIcon}</div>`;
+}
+
 function createCardElement(card, projectMap) {
   const linkCount = Array.isArray(card.links) ? card.links.length : 0;
   const projectName = card.project || '';
   const assignee = card.assignee || '';
+  const linkedUser = card.assigned_user_id ? latestUsers.find(u => u.id === card.assigned_user_id) : null;
+  const linkedUserName = linkedUser ? linkedUser.display_name : '';
   const projectDetails = projectMap && projectMap.get(projectName);
   const projectColor = projectDetails && projectDetails.color ? projectDetails.color : null;
   const el = document.createElement('div');
@@ -291,12 +309,14 @@ function createCardElement(card, projectMap) {
     <div class="card-footer">
       <div class="card-footer-left">
         ${linkCount > 0 ? `<div class="card-links" title="${linkCount} link${linkCount!==1?'s':''}">🔗 ${linkCount}</div>` : ''}
+        ${formatDueDateBadge(card)}
       </div>
       <div class="card-footer-center">
-        ${projectName || assignee ? `
+        ${projectName || assignee || linkedUserName ? `
           <div class="card-footer-center-meta">
             ${projectName ? `<div class="card-project" title="Project: ${escapeHtml(projectName)}">${escapeHtml(projectName)}</div>` : ''}
             ${assignee ? `<div class="card-assignee" title="Assignee: ${escapeHtml(assignee)}">👤 ${escapeHtml(assignee)}</div>` : ''}
+            ${linkedUserName ? `<div class="card-linked-user" title="Calendar syncs to ${escapeHtml(linkedUserName)}">📅 ${escapeHtml(linkedUserName)}</div>` : ''}
           </div>
         ` : ''}
       </div>
@@ -568,6 +588,8 @@ settingsModal.innerHTML = `
       <button type="button" class="settings-tab-btn active" data-tab="statuses">Statuses</button>
       <button type="button" class="settings-tab-btn" data-tab="projects">Projects</button>
       <button type="button" class="settings-tab-btn" data-tab="import">Import/Export</button>
+      <button type="button" class="settings-tab-btn" data-tab="users">👤 Users</button>
+      <button type="button" class="settings-tab-btn" data-tab="calendar">📅 Calendar</button>
       <button type="button" class="settings-tab-btn" data-tab="about">About</button>
     </div>
     <div class="settings-tab-panels">
@@ -606,6 +628,41 @@ settingsModal.innerHTML = `
               <button type="button" id="importBoardBtn">Import kanban.json</button>
             </div>
           </section>
+        </div>
+      </div>
+      <div class="settings-tab-panel" data-tab="users">
+        <div id="usersList" class="users-list"></div>
+        <div class="add-user">
+          <input id="newUserUsername" placeholder="Username" autocomplete="off" />
+          <input id="newUserDisplayName" placeholder="Display name (optional)" autocomplete="off" />
+          <input id="newUserPassword" type="password" placeholder="Password (min 8 chars)" autocomplete="new-password" />
+          <button id="addUserBtn">Add User</button>
+        </div>
+        <p class="users-hint">
+          Any logged-in user can add or remove other users. Only you can change your own password.
+          Each user connects their own Google Calendar from the 📅 Calendar tab while logged in as them.
+        </p>
+      </div>
+      <div class="settings-tab-panel" data-tab="calendar">
+        <div class="gcal-settings-panel">
+          <div class="gcal-status-card">
+            <div class="gcal-status-row">
+              <span class="gcal-status-dot" id="gcalStatusDot"></span>
+              <span id="gcalStatusText">Checking status…</span>
+            </div>
+            <div class="gcal-status-detail" id="gcalStatusDetail"></div>
+          </div>
+          <div class="gcal-settings-actions">
+            <button type="button" id="gcalConnectBtn">Connect Google Calendar</button>
+            <button type="button" id="gcalSyncNowBtn" style="display:none">Sync now</button>
+            <button type="button" id="gcalDisconnectBtn" style="display:none">Disconnect</button>
+          </div>
+          <p class="gcal-settings-hint">
+            This connects <strong>your</strong> Google account<span id="gcalHintWhoami"></span> — each person
+            connects their own. Cards with a due date <strong>assigned to you</strong> (via "Linked user" on the
+            card) are pushed to your calendar as events, and changes made on the calendar side (including new
+            events) are pulled back in roughly every minute.
+          </p>
         </div>
       </div>
       <div class="settings-tab-panel" data-tab="about">
@@ -793,6 +850,101 @@ async function renderProjectSettings(){
   });
 
   refreshProjectInputs();
+}
+
+const CURRENT_USER = window.PERKAN_CURRENT_USER || null;
+let latestUsers = [];
+
+async function fetchUsers(){
+  const res = await fetch('/api/users');
+  const data = await res.json();
+  latestUsers = Array.isArray(data.users) ? data.users : [];
+  return latestUsers;
+}
+
+async function renderUserSettings(){
+  const list = document.getElementById('usersList');
+  if(!list) return;
+  const usersData = await fetchUsers();
+  list.innerHTML = '';
+  if(!usersData.length){
+    const empty = document.createElement('div');
+    empty.className = 'project-empty';
+    empty.textContent = 'No users yet';
+    list.appendChild(empty);
+  }
+  usersData.forEach(u => {
+    const isSelf = CURRENT_USER && CURRENT_USER.id === u.id;
+    const row = document.createElement('div');
+    row.className = 'user-row';
+    row.innerHTML = `
+      <input class="user-display-name" data-id="${u.id}" value="${escapeHtml(u.display_name || '')}" placeholder="Display name" />
+      <span class="user-username">@${escapeHtml(u.username)}${isSelf ? ' (you)' : ''}${u.google_linked ? ' <span class="user-google-badge" title="Signs in with Google">G</span>' : ''}</span>
+      ${isSelf ? `<input class="user-new-password" type="password" data-id="${u.id}" placeholder="${u.has_password ? 'New password (optional)' : 'Set a password (optional)'}" autocomplete="new-password" />` : '<span></span>'}
+      <button class="user-delete" data-id="${u.id}" ${isSelf ? 'disabled title="Log in as someone else to delete this account"' : ''}>Delete</button>
+    `;
+    list.appendChild(row);
+  });
+
+  list.querySelectorAll('.user-display-name').forEach(inp => {
+    inp.addEventListener('change', async (e) => {
+      const id = e.target.dataset.id;
+      const display_name = e.target.value.trim();
+      await fetch('/api/users/' + id, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({display_name})});
+      await renderUserSettings();
+      render({useLatest: true});
+    });
+  });
+  list.querySelectorAll('.user-new-password').forEach(inp => {
+    inp.addEventListener('change', async (e) => {
+      const id = e.target.dataset.id;
+      const password = e.target.value;
+      if(!password) return;
+      if(password.length < 8){ alert('password must be at least 8 characters'); e.target.value=''; return; }
+      const res = await fetch('/api/users/' + id, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password})});
+      if(res.ok){ alert('Password updated'); } else { const err = await res.json(); alert(err.error || 'Failed to update password'); }
+      e.target.value = '';
+    });
+  });
+  list.querySelectorAll('.user-delete').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      const id = e.target.dataset.id;
+      if(!confirm('Delete this user? Cards assigned to them will be unassigned.')) return;
+      const res = await fetch('/api/users/' + id, {method:'DELETE'});
+      if(!res.ok){ const err = await res.json(); alert(err.error || 'Failed to delete user'); return; }
+      await renderUserSettings();
+      refreshAssignedUserSelects();
+    });
+  });
+
+  refreshAssignedUserSelects();
+}
+
+const addUserBtn = document.getElementById('addUserBtn');
+if(addUserBtn){
+  addUserBtn.addEventListener('click', async () => {
+    const username = document.getElementById('newUserUsername').value.trim();
+    const display_name = document.getElementById('newUserDisplayName').value.trim();
+    const password = document.getElementById('newUserPassword').value;
+    if(!username || !password) return alert('username and password required');
+    const res = await fetch('/api/users', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username, display_name, password})});
+    if(!res.ok){ const err = await res.json(); alert(err.error || 'Failed to create user'); return; }
+    document.getElementById('newUserUsername').value = '';
+    document.getElementById('newUserDisplayName').value = '';
+    document.getElementById('newUserPassword').value = '';
+    await renderUserSettings();
+  });
+}
+
+function refreshAssignedUserSelects(){
+  document.querySelectorAll('select[data-assigned-user-select]').forEach(sel => {
+    const current = sel.value;
+    sel.innerHTML = '<option value="">Unassigned</option>' +
+      latestUsers.map(u => `<option value="${u.id}">${escapeHtml(u.display_name)}</option>`).join('');
+    if(latestUsers.some(u => u.id === current)){
+      sel.value = current;
+    }
+  });
 }
 
 const projectPickerRegistry = new Map();
@@ -1057,8 +1209,105 @@ function activateSettingsTab(tabId){
     renderStatusSettings();
   } else if(tabId === 'projects'){
     renderProjectSettings();
+  } else if(tabId === 'users'){
+    renderUserSettings();
+  } else if(tabId === 'calendar'){
+    renderGcalSettings();
   }
 }
+
+async function renderGcalSettings(){
+  const dot = document.getElementById('gcalStatusDot');
+  const text = document.getElementById('gcalStatusText');
+  const detail = document.getElementById('gcalStatusDetail');
+  const connectBtn = document.getElementById('gcalConnectBtn');
+  const syncBtn = document.getElementById('gcalSyncNowBtn');
+  const disconnectBtn = document.getElementById('gcalDisconnectBtn');
+  if(!dot) return;
+  const whoami = document.getElementById('gcalHintWhoami');
+  if(whoami){
+    whoami.textContent = CURRENT_USER ? ` (you're logged in as ${CURRENT_USER.display_name})` : '';
+  }
+  try {
+    const res = await fetch('/api/gcal/status');
+    const status = await res.json();
+    if(!status.configured){
+      dot.className = 'gcal-status-dot disconnected';
+      text.textContent = 'Not configured';
+      detail.textContent = 'Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET on the server to enable Google Calendar sync.';
+      connectBtn.style.display = 'none';
+      syncBtn.style.display = 'none';
+      disconnectBtn.style.display = 'none';
+      return;
+    }
+    if(status.connected){
+      dot.className = 'gcal-status-dot' + (status.last_sync_error ? ' error' : ' connected');
+      text.textContent = status.connected_email ? `Connected as ${status.connected_email}` : 'Connected';
+      const lastSync = status.last_sync ? new Date(status.last_sync * 1000).toLocaleString() : 'never';
+      detail.textContent = status.last_sync_error
+        ? `Last sync error: ${status.last_sync_error}`
+        : `Calendar: ${status.calendar_id} · Last synced: ${lastSync}`;
+      connectBtn.style.display = 'none';
+      syncBtn.style.display = 'inline-block';
+      disconnectBtn.style.display = 'inline-block';
+    } else {
+      dot.className = 'gcal-status-dot disconnected';
+      text.textContent = 'Not connected';
+      detail.textContent = '';
+      connectBtn.style.display = 'inline-block';
+      syncBtn.style.display = 'none';
+      disconnectBtn.style.display = 'none';
+    }
+  } catch(err) {
+    dot.className = 'gcal-status-dot error';
+    text.textContent = 'Unable to reach server';
+    detail.textContent = String(err.message || err);
+  }
+}
+
+const gcalConnectBtn = document.getElementById('gcalConnectBtn');
+if(gcalConnectBtn){
+  gcalConnectBtn.addEventListener('click', () => {
+    window.location.href = '/auth/google/login';
+  });
+}
+const gcalDisconnectBtn = document.getElementById('gcalDisconnectBtn');
+if(gcalDisconnectBtn){
+  gcalDisconnectBtn.addEventListener('click', async () => {
+    if(!confirm('Disconnect Google Calendar? Existing calendar events will not be deleted, but cards will stop syncing.')) return;
+    await fetch('/auth/google/disconnect', {method: 'POST'});
+    renderGcalSettings();
+  });
+}
+const gcalSyncNowBtn = document.getElementById('gcalSyncNowBtn');
+if(gcalSyncNowBtn){
+  gcalSyncNowBtn.addEventListener('click', async () => {
+    gcalSyncNowBtn.disabled = true;
+    gcalSyncNowBtn.textContent = 'Syncing…';
+    try {
+      await fetch('/api/gcal/sync', {method: 'POST'});
+      if(document.getElementById('board')){
+        await render();
+      } else if(typeof listRender === 'function'){
+        await listRender();
+      }
+    } finally {
+      gcalSyncNowBtn.disabled = false;
+      gcalSyncNowBtn.textContent = 'Sync now';
+      renderGcalSettings();
+    }
+  });
+}
+
+(function showGcalRedirectNotice(){
+  const params = new URLSearchParams(window.location.search);
+  if(params.has('gcal_connected')){
+    window.history.replaceState({}, '', window.location.pathname);
+  } else if(params.has('gcal_error')){
+    alert('Google Calendar connection failed: ' + params.get('gcal_error'));
+    window.history.replaceState({}, '', window.location.pathname);
+  }
+})();
 
 function openSettingsModal(tabId){
   const modal = document.getElementById('settingsModal');
@@ -1227,6 +1476,14 @@ cardEditModal.innerHTML = `
       </div>
       <label>Assignee:</label>
       <input id="editCardAssignee" class="modal-input" placeholder="Assignee (optional)" />
+      <label>Linked user <span class="linked-user-hint">(whose Google Calendar this syncs to)</span>:</label>
+      <select id="editCardAssignedUser" class="modal-input" data-assigned-user-select></select>
+      <label>Due date: <span class="due-date-sync-badge hidden" id="editCardDueSyncBadge" title="Synced to Google Calendar">🔗 synced</span></label>
+      <div class="due-date-row">
+        <input id="editCardDueDate" class="modal-input" type="datetime-local" />
+        <label class="due-date-allday"><input type="checkbox" id="editCardAllDay" /> All day</label>
+        <button type="button" id="editCardClearDueDate" title="Clear due date">✕</button>
+      </div>
       <label>Description:</label>
       <textarea id="editCardDesc" placeholder="Description (optional)"></textarea>
       <div class="links-section">
@@ -1321,9 +1578,16 @@ async function openCardEditModal(card, isNew = false){
   document.getElementById('editCardTitle').value = card.title || '';
   document.getElementById('editCardDesc').value = card.description || '';
   document.getElementById('editCardAssignee').value = card.assignee || '';
+  refreshAssignedUserSelects();
+  document.getElementById('editCardAssignedUser').value = card.assigned_user_id || '';
   const editProjectInput = document.getElementById('editCardProject');
   populateProjectInput(editProjectInput, card.project || '');
   renderLinkRows(card.links || []);
+  document.getElementById('editCardAllDay').checked = !!card.all_day;
+  document.getElementById('editCardDueDate').value = card.due_date
+    ? (card.all_day ? card.due_date.slice(0,10) + 'T00:00' : card.due_date.slice(0,16))
+    : '';
+  document.getElementById('editCardDueSyncBadge').classList.toggle('hidden', !card.gcal_event_id);
 
   // Update title with more prominent styling
   const titleEl = document.getElementById('editCardModalTitle');
@@ -1372,6 +1636,18 @@ function closeCardEditModal(){
   modal.classList.add('hidden');
 }
 
+function readDueDateFromForm(){
+  const allDay = document.getElementById('editCardAllDay').checked;
+  const raw = document.getElementById('editCardDueDate').value;
+  if(!raw) return {due_date: '', all_day: allDay};
+  return {due_date: allDay ? raw.slice(0,10) : raw, all_day: allDay};
+}
+
+document.getElementById('editCardClearDueDate').addEventListener('click', ()=>{
+  document.getElementById('editCardDueDate').value = '';
+  document.getElementById('editCardAllDay').checked = false;
+});
+
 document.getElementById('editCardCancelBtn').addEventListener('click', ()=>{ closeCardEditModal(); });
 document.getElementById('editCardDeleteBtn').addEventListener('click', async ()=>{
   if(!confirm('Delete this task?')) return;
@@ -1387,10 +1663,12 @@ document.getElementById('editCardDuplicateBtn').addEventListener('click', async 
   const title = document.getElementById('editCardTitle').value.trim();
   const description = document.getElementById('editCardDesc').value.trim();
   const assignee = document.getElementById('editCardAssignee').value.trim();
+  const assigned_user_id = document.getElementById('editCardAssignedUser').value;
   if(!title) return alert('title required');
   const links = collectLinkRows();
   const project = document.getElementById('editCardProject').value;
-  
+  const {due_date, all_day} = readDueDateFromForm();
+
   // Find the column of the original card
   const board = await fetchBoard();
   let columnId = null;
@@ -1403,12 +1681,12 @@ document.getElementById('editCardDuplicateBtn').addEventListener('click', async 
     }
     if(columnId) break;
   }
-  
+
   if(!columnId) return alert('Could not find column for duplicate');
-  
+
   // Create new card with duplicated data
   try {
-    const res = await fetch('/api/card', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({title, description, links, project, assignee, column: columnId})});
+    const res = await fetch('/api/card', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({title, description, links, project, assignee, assigned_user_id, due_date, all_day, column: columnId})});
     if(!res.ok) throw new Error('Failed to create card');
     const newCard = await res.json();
     if(!newCard || !newCard.id) throw new Error('No ID returned for new card');
@@ -1425,11 +1703,13 @@ document.getElementById('editCardSaveBtn').addEventListener('click', async ()=>{
   const title = document.getElementById('editCardTitle').value.trim();
   const description = document.getElementById('editCardDesc').value.trim();
   const assignee = document.getElementById('editCardAssignee').value.trim();
+  const assigned_user_id = document.getElementById('editCardAssignedUser').value;
   if(!title) return alert('title required');
   const links = collectLinkRows();
   const project = document.getElementById('editCardProject').value;
+  const {due_date, all_day} = readDueDateFromForm();
   try {
-    const res = await fetch('/api/card/' + cardId, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({title, description, links, project, assignee})});
+    const res = await fetch('/api/card/' + cardId, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({title, description, links, project, assignee, assigned_user_id, due_date, all_day})});
     if(!res.ok) throw new Error('Failed to save card');
     closeCardEditModal();
     render();
@@ -1788,6 +2068,10 @@ if(truncateBtn2 && cardTruncationEnabled){
   truncateBtn2.setAttribute('aria-pressed', 'true');
   truncateBtn2.classList.add('active');
 }
+
+// Local users are needed for the card editor's linked-user dropdown on
+// both the board and list pages, so fetch them regardless of view.
+fetchUsers().then(refreshAssignedUserSelects);
 
 // Initial render (only on board view page)
 const boardEl = document.getElementById('board');

@@ -17,12 +17,21 @@
         <div id="projectFilters" class="project-filters" aria-live="polite"></div>
         <button id="truncateBtn" title="Toggle card truncation" aria-pressed="false">📋 Truncate</button>
         <button id="settingsBtn" title="Board settings">⚙️ Settings</button>
+        {% if current_user %}
+        <div class="header-user">
+          <span class="header-user-name">{{ current_user.display_name }}</span>
+          <form method="POST" action="/logout" style="margin:0">
+            <button type="submit" class="header-logout-btn">Log out</button>
+          </form>
+        </div>
+        {% endif %}
       </div>
     </header>
     <main id="board" class="board">
       <!-- Columns render here -->
     </main>
 
+    <script>window.PERKAN_CURRENT_USER = {{ (current_user or None) | tojson }};</script>
     <script src="/static/app.js"></script>
   </body>
 </html>
