@@ -24,3 +24,15 @@ From the `perkan` directory:
 `docker compose up --build -d`
 
 The service runs Gunicorn with conservative settings (2 workers, 4 threads, 60s timeout).
+
+## MCP server
+
+PerKan exposes an [MCP](https://modelcontextprotocol.io) server at `POST /mcp` (Streamable HTTP, stateless, JSON responses). It shares the web app's process and data, and like the rest of the app it has no authentication.
+
+Tools: `get_board`, `list_cards`, `create_card`, `update_card` (also moves cards), `delete_card`, `list_columns`, `create_column`, `update_column`, `delete_column`, `list_projects`, `create_project`, `update_project`, `delete_project`. Each calls the matching `/api/*` route, so behavior is identical to the UI.
+
+Connect from Claude Code:
+
+`claude mcp add --transport http perkan http://localhost:5000/mcp`
+
+Browser requests with a foreign `Origin` header are rejected (DNS-rebinding protection); set `MCP_ALLOWED_ORIGINS` to a comma-separated list to allow others.
