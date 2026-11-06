@@ -6,7 +6,7 @@ are identical to the web UI. No authentication (the app has none).
 """
 import json
 import os
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 from flask import Blueprint, Response, current_app, jsonify, request
 
@@ -24,6 +24,9 @@ def _obj(props, required=None):
         schema['required'] = required
     return schema
 
+
+_HIDDEN = {'include_hidden': {'type': 'boolean',
+                              'description': 'Also include hidden columns (and their cards). Off by default.'}}
 
 _LINKS = {
     'type': 'array',
@@ -54,31 +57,18 @@ def _project_index(name):
     return None
 
 
+def _with_query(path, args, names):
+    params = {k: args[k] for k in names if args.get(k) not in (None, '')}
+    return path + ('?' + urlencode(params) if params else '')
+
+
 def _tool_get_board(args):
-    return _api('GET', '/api/board')
+    return _api('GET', _with_query('/api/board', args, ['include_hidden']))
 
 
 def _tool_list_cards(args):
-    status, board = _api('GET', '/api/board')
-    if status != 200:
-        return status, board
-    column = args.get('column')
-    project = args.get('project')
-    assignee = args.get('assignee')
-    query = (args.get('query') or '').lower()
-    cards = []
-    for col in board.get('columns', []):
-        if column and col['id'] != column:
-            continue
-        for card in col.get('cards', []):
-            if project and card.get('project') != project:
-                continue
-            if assignee and card.get('assignee') != assignee:
-                continue
-            if query and query not in (card.get('title', '') + ' ' + card.get('description', '')).lower():
-                continue
-            cards.append(dict(card, column=col['id']))
-    return 200, {'cards': cards}
+    return _api('GET', _with_query('/api/cards', args,
+                                   ['column', 'project', 'assignee', 'query', 'limit', 'offset', 'include_hidden']))
 
 
 def _tool_create_card(args):
@@ -98,7 +88,7 @@ def _tool_delete_card(args):
 
 
 def _tool_list_columns(args):
-    return _api('GET', '/api/columns')
+    return _api('GET', _with_query('/api/columns', args, ['include_hidden']))
 
 
 def _tool_create_column(args):
@@ -146,28 +136,42 @@ def _tool_delete_project(args):
 
 
 TOOLS = [
-    ('get_board', 'Get the entire board: all columns (with their cards) and projects.',
-     _obj({}), _tool_get_board),
-    ('list_cards', 'List cards, optionally filtered. Each card includes its column id.',
+    ('get_board', 'Get the board: visible columns (with their cards, sorted by order) and projects. '
+                  'Hidden columns are left out unless include_hidden is true. Large; prefer list_cards '
+                  'with a limit when you only need a few cards.',
+     _obj(_HIDDEN), _tool_get_board),
+    ('list_cards', 'List cards in global order (the "order" field, lowest first), optionally filtered and paged. '
+                   'Each card includes its column id; "total" is the number of matches before limit/offset. '
+                   'Use column + limit to get the top N cards of a column. Cards in hidden columns are skipped '
+                   'unless include_hidden is true or column names that hidden column.',
      _obj({'column': dict(_STR, description='Column id.'),
            'project': dict(_STR, description='Project name.'),
            'assignee': _STR,
-           'query': dict(_STR, description='Case-insensitive text to find in title or description.')}),
+           'query': dict(_STR, description='Case-insensitive text to find in title or description.'),
+           'limit': {'type': 'integer', 'minimum': 0, 'description': 'Return at most this many cards.'},
+           'offset': {'type': 'integer', 'minimum': 0, 'description': 'Skip this many matching cards first.'},
+           **_HIDDEN}),
      _tool_list_cards),
-    ('create_card', 'Create a card. Setting a project creates it if missing and applies its color.',
+    ('create_card', 'Create a card. Setting a project creates it if missing and applies its color. '
+                    'It goes after all other cards unless position is given.',
      _obj({'title': _STR, 'description': _STR,
            'column': dict(_STR, description="Column id (default 'todo')."),
+           'position': {'type': 'integer', 'description': 'Index within the column (0 = top).'},
            'project': _STR, 'assignee': _STR, 'color': dict(_STR, description='Hex color; ignored if project set.'),
            'links': _LINKS}, ['title']),
      _tool_create_card),
-    ('update_card', "Update a card's fields and/or move it. Set 'column' (and optional 'position') to move. "
-                    "Pass an empty string for project/assignee to clear them.",
+    ('update_card', "Update a card's fields, move it to another column, and/or reorder it. "
+                    "Order is one global value per card. Moving with only 'column' keeps the card's order "
+                    "value, so it lands where that value falls in the destination column. 'position' (0 = top) "
+                    "places it at that index among the column's other cards, changing only this card's order "
+                    "value; it works within the current column too. Pass an empty string for project/assignee to clear them.",
      _obj({'id': _STR, 'title': _STR, 'description': _STR, 'column': dict(_STR, description='Destination column id.'),
-           'position': {'type': 'integer', 'description': 'Index within destination column (when moving).'},
+           'position': {'type': 'integer', 'description': 'Index among the destination column\'s other cards (0 = top).'},
            'project': _STR, 'assignee': _STR, 'color': _STR, 'links': _LINKS}, ['id']),
      _tool_update_card),
     ('delete_card', 'Delete a card by id.', _obj({'id': _STR}, ['id']), _tool_delete_card),
-    ('list_columns', 'List columns (id, title, color, hidden) without cards.', _obj({}), _tool_list_columns),
+    ('list_columns', 'List columns (id, title, color, hidden) without cards. Hidden columns are left out '
+                     'unless include_hidden is true.', _obj(_HIDDEN), _tool_list_columns),
     ('create_column', 'Create a column.',
      _obj({'title': _STR, 'color': _STR, 'hidden': {'type': 'boolean'},
            'position': {'type': 'integer'}}, ['title']),

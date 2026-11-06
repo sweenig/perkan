@@ -4,7 +4,7 @@ let cardTruncationEnabled = localStorage.getItem('cardTruncationEnabled') !== 'f
 let draggedCardId = null;
 let draggedCardColumnId = null;
 async function fetchBoard() {
-  const res = await fetch('/api/board');
+  const res = await fetch('/api/board?include_hidden=true');
   latestBoard = await res.json();
   return latestBoard;
 }

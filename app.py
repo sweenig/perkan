@@ -1,24 +1,17 @@
-from flask import Flask, jsonify, request, render_template, abort, send_file
+from flask import Flask, jsonify, request, render_template, Response
 import json
-import os
-import threading
 import uuid
 import re
-import time
 import logging
-import errno
-import shutil
 import random
 import copy
+import math
+
+import db
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
-# Basic logging for debugging slow I/O
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
-DATA_FILE = os.path.join(DATA_DIR, 'kanban.json')
-_lock = threading.Lock()
 
 DEFAULT_CARD_COLOR = '#5b2e8a'
 
@@ -52,10 +45,30 @@ def _sanitize_card(card):
     order = card.get('order')
     if order is not None:
         try:
-            sanitized['order'] = float(order)
+            order = float(order)
+            if math.isfinite(order):
+                sanitized['order'] = order
         except (TypeError, ValueError):
             pass
     return sanitized
+
+
+def _ensure_global_orders(columns):
+    """Cards share one global order: every card needs a distinct `order`. If any are
+    missing or repeated, renumber them all, keeping the order people see today (by
+    existing order, then column, then position), with hidden columns' cards last."""
+    entries = [(ci, idx, card) for ci, col in enumerate(columns) for idx, card in enumerate(col['cards'])]
+    orders = [card.get('order') for _ci, _idx, card in entries]
+    if all(o is not None for o in orders) and len(set(orders)) == len(orders):
+        return
+
+    def key(entry):
+        ci, idx, card = entry
+        order = card.get('order')
+        return (bool(columns[ci]['hidden']), order if order is not None else math.inf, ci, idx)
+
+    for n, (_ci, _idx, card) in enumerate(sorted(entries, key=key)):
+        card['order'] = float((n + 1) * 1_000_000)
 
 
 def _normalize_board(data):
@@ -67,16 +80,20 @@ def _normalize_board(data):
         data['projects'] = []
 
     normalized_columns = []
+    seen_ids = set()      # card ids must be unique across the whole board (they are a primary key)
+    seen_columns = set()
     for col in data['columns']:
         if not isinstance(col, dict):
             continue
         col_id = col.get('id') or str(uuid.uuid4())
+        if col_id in seen_columns:
+            col_id = str(uuid.uuid4())
+        seen_columns.add(col_id)
         title = str(col.get('title') or '').strip() or 'Untitled'
         color = col.get('color') or '#9aa0a6'
         hidden = bool(col.get('hidden', False))
         cards_payload = col.get('cards') if isinstance(col.get('cards'), list) else []
         normalized_cards = []
-        seen_ids = set()
         for card in cards_payload:
             sanitized = _sanitize_card(card)
             if not sanitized:
@@ -85,11 +102,9 @@ def _normalize_board(data):
                 sanitized['id'] = str(uuid.uuid4())
             seen_ids.add(sanitized['id'])
             normalized_cards.append(sanitized)
-        # assign order to any card that lacks one
-        for _i, _card in enumerate(normalized_cards):
-            if 'order' not in _card:
-                _card['order'] = float((_i + 1) * 1_000_000)
         normalized_columns.append({'id': col_id, 'title': title, 'color': color, 'hidden': hidden, 'cards': normalized_cards})
+
+    _ensure_global_orders(normalized_columns)
 
     normalized_projects = []
     seen_projects = set()
@@ -107,16 +122,29 @@ def _normalize_board(data):
     return data
 
 
-def _get_projects(board):
-    projects = board.get('projects')
-    if not isinstance(projects, list):
-        projects = []
-        board['projects'] = projects
-    return projects
+def _finite_or_none(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
-def _generate_unique_color(board, attempts=32):
-    existing = { (proj.get('color') or '').lower() for proj in _get_projects(board) if proj.get('color') }
+def _truthy(value):
+    return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _int_or_none(value):
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _generate_unique_color(conn, attempts=32):
+    existing = {(r['color'] or '').lower() for r in conn.execute('SELECT color FROM projects') if r['color']}
     for _ in range(attempts):
         color = f"#{random.randint(0, 0xFFFFFF):06x}"
         if color.lower() not in existing:
@@ -124,101 +152,29 @@ def _generate_unique_color(board, attempts=32):
     return f"#{random.randint(0, 0xFFFFFF):06x}"
 
 
-def _ensure_project(board, project_name):
+def _find_project(conn, project_name):
+    if not project_name:
+        return None
+    row = conn.execute('SELECT name, color FROM projects WHERE name = ?', (project_name,)).fetchone()
+    return {'name': row['name'], 'color': row['color']} if row else None
+
+
+def _ensure_project(conn, project_name):
     project_name = (project_name or '').strip()
     if not project_name:
         return None
-    projects = _get_projects(board)
-    existing = next((p for p in projects if p.get('name') == project_name), None)
+    existing = _find_project(conn, project_name)
     if existing:
-        if not existing.get('color'):
-            existing['color'] = DEFAULT_CARD_COLOR
         return existing
-    color = _generate_unique_color(board)
-    project = {'name': project_name, 'color': color}
-    projects.append(project)
-    return project
-
-
-def _find_project(board, project_name):
-    if not project_name:
-        return None
-    projects = _get_projects(board)
-    for proj in projects:
-        if proj.get('name') == project_name:
-            return proj
-    return None
-
-
-def _apply_project_color_to_cards(board, project_name, color):
-    if not project_name:
-        return
-    for col in board.get('columns', []):
-        for card in col.get('cards', []):
-            if card.get('project') == project_name:
-                if color:
-                    card['color'] = color
-                else:
-                    card['color'] = DEFAULT_CARD_COLOR
-
-
-def _update_project_references(board, old_name, new_name=None, project_color=None):
-    for col in board.get('columns', []):
-        for card in col.get('cards', []):
-            if card.get('project') == old_name:
-                if new_name:
-                    card['project'] = new_name
-                    if project_color:
-                        card['color'] = project_color
-                else:
-                    card.pop('project', None)
-                    card['color'] = DEFAULT_CARD_COLOR
+    color = _generate_unique_color(conn)
+    position = conn.execute('SELECT COALESCE(MAX(position), -1) + 1 FROM projects').fetchone()[0]
+    conn.execute('INSERT INTO projects (name, color, position) VALUES (?,?,?)', (project_name, color, position))
+    return {'name': project_name, 'color': color}
 
 
 def _ensure_data_file():
-    if not os.path.exists(DATA_DIR):
-        os.makedirs(DATA_DIR)
-    if not os.path.exists(DATA_FILE):
-        logger.info('Creating new blank kanban board at %s', DATA_FILE)
-        _save_data(DEFAULT_BOARD)
-
-
-def _load_data():
-    _ensure_data_file()
-    start = time.perf_counter()
-    with open(DATA_FILE, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-        data = _normalize_board(data)
-    elapsed = time.perf_counter() - start
-    if elapsed > 0.5:
-        logger.warning('Slow _load_data: %.3fs', elapsed)
-    return data
-
-
-def _save_data(data):
-    # Use lock to avoid concurrent writes from threads
-    with _lock:
-        start = time.perf_counter()
-        tmp = DATA_FILE + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
-        try:
-            os.replace(tmp, DATA_FILE)
-        except OSError as exc:
-            recoverable = {errno.EXDEV, errno.EBUSY, errno.EACCES, errno.EPERM}
-            if exc.errno in recoverable:
-                shutil.copyfile(tmp, DATA_FILE)
-                os.remove(tmp)
-            else:
-                os.remove(tmp)
-                raise
-        elapsed = time.perf_counter() - start
-        if elapsed > 0.5:
-            logger.warning('Slow _save_data: %.3fs', elapsed)
-
-
-# Ensure the data file exists as soon as the app module loads
-_ensure_data_file()
+    """Create the schema, importing a legacy kanban.json on first run."""
+    db.init(_normalize_board, DEFAULT_BOARD)
 
 
 def _clean_links(raw_links):
@@ -278,6 +234,10 @@ def _merge_boards(existing, incoming):
 
 
 
+# Make sure the database exists as soon as the app module loads
+_ensure_data_file()
+
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -290,13 +250,17 @@ def list_view():
 
 @app.route('/api/board', methods=['GET'])
 def get_board():
-    return jsonify(_load_data())
+    # Hidden columns (and their cards) are left out unless ?include_hidden=true
+    with db.read() as conn:
+        return jsonify(db.load_board(conn, include_hidden=_truthy(request.args.get('include_hidden'))))
 
 
 @app.route('/api/board/export', methods=['GET'])
 def export_board():
-    _ensure_data_file()
-    return send_file(DATA_FILE, mimetype='application/json', as_attachment=True, download_name='kanban.json')
+    with db.read() as conn:
+        board = db.load_board(conn, include_hidden=True)   # a backup must contain everything
+    return Response(json.dumps(board, indent=2), mimetype='application/json',
+                    headers={'Content-Disposition': 'attachment; filename=kanban.json'})
 
 
 @app.route('/api/board/import', methods=['POST'])
@@ -313,14 +277,35 @@ def import_board():
     if mode not in {'merge', 'replace'}:
         mode = 'merge'
 
-    if mode == 'replace':
-        board = _normalize_board(payload)
-    else:
-        current = _load_data()
-        board = _merge_boards(current, payload)
-
-    _save_data(board)
+    with db.write() as conn:
+        if mode == 'replace':
+            board = _normalize_board(payload)
+        else:
+            board = _merge_boards(db.load_board(conn, include_hidden=True), payload)
+        db.replace_board(conn, board)
     return jsonify({'status': 'ok', 'mode': mode})
+
+
+@app.route('/api/cards', methods=['GET'])
+def get_cards():
+    """Cards in global order. Filters: column, project, assignee, query; paging: limit, offset.
+    Cards in hidden columns are skipped unless include_hidden=true or `column` names that column."""
+    args = request.args
+    limit = offset = None
+    if args.get('limit') not in (None, ''):
+        limit = _int_or_none(args.get('limit'))
+        if limit is None or limit < 0:
+            return jsonify({'error': 'limit must be a non-negative integer'}), 400
+    if args.get('offset') not in (None, ''):
+        offset = _int_or_none(args.get('offset'))
+        if offset is None or offset < 0:
+            return jsonify({'error': 'offset must be a non-negative integer'}), 400
+    with db.read() as conn:
+        cards, total = db.list_cards(
+            conn, column=args.get('column') or None, project=args.get('project') or None,
+            assignee=args.get('assignee') or None, query=args.get('query') or None,
+            limit=limit, offset=offset or 0, include_hidden=_truthy(args.get('include_hidden')))
+    return jsonify({'cards': cards, 'total': total})
 
 
 @app.route('/api/card', methods=['POST'])
@@ -330,49 +315,52 @@ def create_card():
     description = data.get('description', '')
     column_id = data.get('column', 'todo')
     color = data.get('color')
-    hidden = data.get('hidden')
     project_name = (data.get('project') or '').strip()
     assignee = (data.get('assignee') or '').strip()
     links = _clean_links(data.get('links'))
+    position = _int_or_none(data.get('position'))  # optional index within the column
     if not title:
         return jsonify({'error': 'title required'}), 400
 
-    board = _load_data()
-    card = {
-        'id': str(uuid.uuid4()),
-        'title': title,
-        'description': description,
-        'links': links
-    }
-    if assignee:
-        card['assignee'] = assignee
-    project_details = None
-    if project_name:
-        project_details = _ensure_project(board, project_name)
-        card['project'] = project_name
-        if project_details and project_details.get('color'):
-            card['color'] = project_details['color']
+    with db.write() as conn:
+        if conn.execute('SELECT 1 FROM columns WHERE id = ?', (column_id,)).fetchone() is None:
+            return jsonify({'error': 'column not found'}), 404
+        card = {
+            'id': str(uuid.uuid4()),
+            'title': title,
+            'description': description,
+            'links': links
+        }
+        if assignee:
+            card['assignee'] = assignee
+        project_details = None
+        if project_name:
+            project_details = _ensure_project(conn, project_name)
+            card['project'] = project_name
+            if project_details and project_details.get('color'):
+                card['color'] = project_details['color']
 
-    if color and not project_details:
-        card['color'] = color
-    if 'color' not in card:
-        card['color'] = DEFAULT_CARD_COLOR
+        if color and not project_details:
+            card['color'] = color
+        if 'color' not in card:
+            card['color'] = DEFAULT_CARD_COLOR
 
-    for col in board['columns']:
-        if col['id'] == column_id:
-            existing_orders = [c['order'] for c in col['cards'] if isinstance(c.get('order'), (int, float))]
-            card['order'] = float(max(existing_orders, default=0) + 1_000_000)
-            col['cards'].append(card)
-            _save_data(board)
-            return jsonify(card), 201
-    return jsonify({'error': 'column not found'}), 404
+        explicit = _finite_or_none(data.get('order'))
+        if explicit is not None:
+            card['order'] = db.order_for_explicit(conn, explicit)
+        elif position is not None:
+            card['order'] = db.order_for_position(conn, column_id, position)
+        else:
+            card['order'] = db.end_order(conn)   # default: after everything else
+        db.insert_card(conn, column_id, card)
+        return jsonify(card), 201
 
 
 @app.route('/api/card/<card_id>', methods=['PUT'])
 def update_card(card_id):
     data = request.get_json() or {}
     target_col = data.get('column')
-    position = data.get('position')  # optional integer
+    position = _int_or_none(data.get('position'))  # optional integer
     order = data.get('order')
     title = data.get('title')
     description = data.get('description')
@@ -381,108 +369,73 @@ def update_card(card_id):
     project_payload = data.get('project') if 'project' in data else None
     assignee_payload = data.get('assignee') if 'assignee' in data else None
 
-    board = _load_data()
-    # find and remove card from any column
-    card_obj = None
-    original_column_id = None
-    original_position = None
-    for col in board['columns']:
-        for i, c in enumerate(col['cards']):
-            if c['id'] == card_id:
-                card_obj = c
-                original_column_id = col['id']
-                original_position = i
-                del col['cards'][i]
-                break
-        if card_obj:
-            break
+    with db.write() as conn:
+        card_obj, original_column_id = db.get_card(conn, card_id)
+        if card_obj is None:
+            return jsonify({'error': 'card not found'}), 404
+        if target_col and conn.execute('SELECT 1 FROM columns WHERE id = ?', (target_col,)).fetchone() is None:
+            return jsonify({'error': 'target column not found'}), 404
 
-    if not card_obj:
-        return jsonify({'error': 'card not found'}), 404
-
-    # update fields
-    if title is not None:
-        card_obj['title'] = title
-    if description is not None:
-        card_obj['description'] = description
-    if color is not None:
-        card_obj['color'] = color
-    if project_payload is not None:
-        normalized_project = (project_payload or '').strip()
-        if normalized_project:
-            project_details = _ensure_project(board, normalized_project)
-            card_obj['project'] = normalized_project
+        # update fields
+        if title is not None:
+            card_obj['title'] = title
+        if description is not None:
+            card_obj['description'] = description
+        if color is not None:
+            card_obj['color'] = color
+        if project_payload is not None:
+            normalized_project = (project_payload or '').strip()
+            if normalized_project:
+                project_details = _ensure_project(conn, normalized_project)
+                card_obj['project'] = normalized_project
+                if project_details and project_details.get('color'):
+                    card_obj['color'] = project_details['color']
+            else:
+                card_obj.pop('project', None)
+                if color is None:
+                    card_obj['color'] = DEFAULT_CARD_COLOR
+        if assignee_payload is not None:
+            normalized_assignee = (assignee_payload or '').strip()
+            if normalized_assignee:
+                card_obj['assignee'] = normalized_assignee
+            else:
+                card_obj.pop('assignee', None)
+        if links is not None:
+            card_obj['links'] = _clean_links(links)
+        if card_obj.get('project'):
+            project_details = _find_project(conn, card_obj['project'])
             if project_details and project_details.get('color'):
                 card_obj['color'] = project_details['color']
-        else:
-            card_obj.pop('project', None)
-            if color is None:
-                card_obj['color'] = DEFAULT_CARD_COLOR
-    if assignee_payload is not None:
-        normalized_assignee = (assignee_payload or '').strip()
-        if normalized_assignee:
-            card_obj['assignee'] = normalized_assignee
-        else:
-            card_obj.pop('assignee', None)
-    if links is not None:
-        card_obj['links'] = _clean_links(links)
-    if order is not None:
-        try:
-            card_obj['order'] = float(order)
-        except (TypeError, ValueError):
-            pass
+        elif 'color' not in card_obj:
+            card_obj['color'] = DEFAULT_CARD_COLOR
 
-    if card_obj.get('project'):
-        project_details = _find_project(board, card_obj['project'])
-        if project_details and project_details.get('color'):
-            card_obj['color'] = project_details['color']
-    elif 'color' not in card_obj:
-        card_obj['color'] = DEFAULT_CARD_COLOR
+        destination_column_id = target_col or original_column_id
+        explicit = _finite_or_none(order)
+        if explicit is not None:
+            # an explicit order value wins (kept unique); position is ignored
+            card_obj['order'] = db.order_for_explicit(conn, explicit, card_id)
+        elif position is not None:
+            # index among the destination column's other cards; rewrites only this card's order
+            card_obj['order'] = db.order_for_position(conn, destination_column_id, position, card_id)
+        # else: a plain column move keeps the card's order, so relative positions survive moves
 
-    # place into target column
-    destination_column_id = target_col or original_column_id
-    destination_column = None
-    if destination_column_id:
-        destination_column = next((c for c in board['columns'] if c['id'] == destination_column_id), None)
-
-    if target_col and destination_column is None:
-        return jsonify({'error': 'target column not found'}), 404
-
-    if destination_column is None:
-        destination_column = board['columns'][0]
-
-    if target_col:
-        # honor supplied position when explicitly moving columns
-        if position is None or position >= len(destination_column['cards']):
-            destination_column['cards'].append(card_obj)
-        else:
-            destination_column['cards'].insert(max(0, int(position)), card_obj)
-    else:
-        # keep original relative order when staying in same column
-        insert_idx = original_position if original_position is not None else len(destination_column['cards'])
-        insert_idx = min(insert_idx, len(destination_column['cards']))
-        destination_column['cards'].insert(insert_idx, card_obj)
-
-    _save_data(board)
-    return jsonify(card_obj)
+        db.update_card_row(conn, card_obj, destination_column_id)
+        return jsonify(card_obj)
 
 
 @app.route('/api/card/<card_id>', methods=['DELETE'])
 def delete_card(card_id):
-    board = _load_data()
-    for col in board['columns']:
-        for i, c in enumerate(col['cards']):
-            if c['id'] == card_id:
-                del col['cards'][i]
-                _save_data(board)
-                return jsonify({'deleted': True})
+    with db.write() as conn:
+        deleted = conn.execute('DELETE FROM cards WHERE id = ?', (card_id,)).rowcount
+    if deleted:
+        return jsonify({'deleted': True})
     return jsonify({'error': 'card not found'}), 404
 
 
 @app.route('/api/columns', methods=['GET'])
 def get_columns():
-    board = _load_data()
-    cols = [{'id': c['id'], 'title': c['title'], 'color': c.get('color'), 'hidden': bool(c.get('hidden', False))} for c in board['columns']]
+    with db.read() as conn:
+        cols = db.list_columns(conn, include_hidden=_truthy(request.args.get('include_hidden')))
     return jsonify({'columns': cols})
 
 
@@ -490,55 +443,54 @@ def get_columns():
 def create_column():
     data = request.get_json() or {}
     title = data.get('title')
-    position = data.get('position')
+    position = _int_or_none(data.get('position'))
     color = data.get('color') or '#9aa0a6'
     if not title:
         return jsonify({'error': 'title required'}), 400
-    board = _load_data()
 
     def _slug(s):
         s = s.lower()
         s = re.sub(r'[^a-z0-9]+', '-', s).strip('-')
         return s or str(uuid.uuid4())
 
-    col_id = _slug(title)
-    ids = {c['id'] for c in board['columns']}
-    if col_id in ids:
-        col_id = f"{col_id}-{str(uuid.uuid4())[:8]}"
-
     hidden = bool(data.get('hidden', False))
-    col = {'id': col_id, 'title': title, 'cards': [], 'color': color, 'hidden': hidden}
-    if position is None or position >= len(board['columns']):
-        board['columns'].append(col)
-    else:
-        board['columns'].insert(max(0, int(position)), col)
-    _save_data(board)
-    return jsonify(col), 201
+    with db.write() as conn:
+        ids = db.column_ids(conn)
+        col_id = _slug(title)
+        if col_id in ids:
+            col_id = f"{col_id}-{str(uuid.uuid4())[:8]}"
+        conn.execute('INSERT INTO columns (id, title, color, hidden, position) VALUES (?,?,?,?,?)',
+                     (col_id, title, color, 1 if hidden else 0, len(ids)))
+        if position is not None and position < len(ids):
+            ids.insert(max(0, position), col_id)
+        else:
+            ids.append(col_id)
+        db.place_columns(conn, ids)
+    return jsonify({'id': col_id, 'title': title, 'cards': [], 'color': color, 'hidden': hidden}), 201
 
 
 @app.route('/api/column/<col_id>', methods=['PUT'])
 def update_column(col_id):
     data = request.get_json() or {}
     title = data.get('title')
-    position = data.get('position')
+    position = _int_or_none(data.get('position'))
     color = data.get('color')
     hidden = data.get('hidden')
-    board = _load_data()
-    idx = next((i for i, c in enumerate(board['columns']) if c['id'] == col_id), None)
-    if idx is None:
-        return jsonify({'error': 'column not found'}), 404
-    col = board['columns'][idx]
-    if title is not None:
-        col['title'] = title
-    if color is not None:
-        col['color'] = color
-    if hidden is not None:
-        col['hidden'] = bool(hidden)
-    if position is not None:
-        pos = max(0, int(position))
-        board['columns'].pop(idx)
-        board['columns'].insert(min(pos, len(board['columns'])), col)
-    _save_data(board)
+    with db.write() as conn:
+        ids = db.column_ids(conn)
+        if col_id not in ids:
+            return jsonify({'error': 'column not found'}), 404
+        if title is not None:
+            conn.execute('UPDATE columns SET title = ? WHERE id = ?', (title, col_id))
+        if color is not None:
+            conn.execute('UPDATE columns SET color = ? WHERE id = ?', (color, col_id))
+        if hidden is not None:
+            conn.execute('UPDATE columns SET hidden = ? WHERE id = ?', (1 if hidden else 0, col_id))
+        if position is not None:
+            ids.remove(col_id)
+            ids.insert(min(max(0, position), len(ids)), col_id)
+            db.place_columns(conn, ids)
+        col = next(c for c in db.load_board(conn, include_hidden=True)['columns'] if c['id'] == col_id)
     return jsonify(col)
 
 
@@ -546,23 +498,23 @@ def update_column(col_id):
 def delete_column(col_id):
     data = request.get_json() or {}
     move_to = data.get('move_to')
-    board = _load_data()
-    idx = next((i for i, c in enumerate(board['columns']) if c['id'] == col_id), None)
-    if idx is None:
-        return jsonify({'error': 'column not found'}), 404
-    col = board['columns'].pop(idx)
-    if move_to:
-        target = next((c for c in board['columns'] if c['id'] == move_to), None)
-        if target is not None:
-            target['cards'].extend(col.get('cards', []))
-    _save_data(board)
+    with db.write() as conn:
+        ids = db.column_ids(conn)
+        if col_id not in ids:
+            return jsonify({'error': 'column not found'}), 404
+        ids.remove(col_id)
+        if move_to and move_to in ids:
+            conn.execute('UPDATE cards SET column_id = ? WHERE column_id = ?', (move_to, col_id))  # order values are kept
+        conn.execute('DELETE FROM columns WHERE id = ?', (col_id,))  # cascades to any cards left behind
+        db.place_columns(conn, ids)
     return jsonify({'deleted': True})
 
 
 @app.route('/api/projects', methods=['GET'])
 def get_projects():
-    board = _load_data()
-    projects = _get_projects(board)
+    with db.read() as conn:
+        projects = [{'name': r['name'], 'color': r['color']}
+                    for r in conn.execute('SELECT name, color FROM projects ORDER BY position')]
     return jsonify({'projects': projects})
 
 
@@ -571,78 +523,72 @@ def create_project():
     data = request.get_json() or {}
     name = (data.get('name') or '').strip()
     color = data.get('color')
-    position = data.get('position')
+    position = _int_or_none(data.get('position'))
     if not name:
         return jsonify({'error': 'name required'}), 400
 
-    board = _load_data()
-    projects = _get_projects(board)
-    if any(proj.get('name') == name for proj in projects):
-        return jsonify({'error': 'project name must be unique'}), 400
-    if not color:
-        color = _generate_unique_color(board)
-    project = {'name': name, 'color': color}
-
-    if position is None or position >= len(projects):
-        projects.append(project)
-    else:
-        insert_idx = max(0, int(position))
-        projects.insert(insert_idx, project)
-
-    _save_data(board)
-    return jsonify(project), 201
+    with db.write() as conn:
+        names = db.project_names(conn)
+        if name in names:
+            return jsonify({'error': 'project name must be unique'}), 400
+        if not color:
+            color = _generate_unique_color(conn)
+        conn.execute('INSERT INTO projects (name, color, position) VALUES (?,?,?)', (name, color, len(names)))
+        if position is None or position >= len(names):
+            names.append(name)
+        else:
+            names.insert(max(0, position), name)
+        db.place_projects(conn, names)
+    return jsonify({'name': name, 'color': color}), 201
 
 
 @app.route('/api/project/<int:project_idx>', methods=['PUT'])
 def update_project(project_idx):
     data = request.get_json() or {}
-    board = _load_data()
-    projects = _get_projects(board)
-
-    if project_idx < 0 or project_idx >= len(projects):
-        return jsonify({'error': 'project not found'}), 404
-
-    project = projects[project_idx]
     name = data.get('name')
     color = data.get('color')
-    position = data.get('position')
+    position = _int_or_none(data.get('position'))
 
-    if name is not None:
-        name = name.strip()
-        if not name:
-            return jsonify({'error': 'name required'}), 400
-        if any(i != project_idx and p.get('name') == name for i, p in enumerate(projects)):
-            return jsonify({'error': 'project name must be unique'}), 400
-        old_name = project.get('name')
-        if name != old_name:
-            project['name'] = name
-            _update_project_references(board, old_name, name, project.get('color'))
-    if color is not None:
-        project['color'] = color
-        _apply_project_color_to_cards(board, project['name'], color)
+    with db.write() as conn:
+        names = db.project_names(conn)
+        if project_idx < 0 or project_idx >= len(names):
+            return jsonify({'error': 'project not found'}), 404
+        current = names[project_idx]
 
-    if position is not None:
-        mover = projects.pop(project_idx)
-        insert_idx = max(0, int(position))
-        if insert_idx > len(projects):
-            insert_idx = len(projects)
-        projects.insert(insert_idx, mover)
+        if name is not None:
+            name = name.strip()
+            if not name:
+                return jsonify({'error': 'name required'}), 400
+            if any(i != project_idx and n == name for i, n in enumerate(names)):
+                return jsonify({'error': 'project name must be unique'}), 400
+            if name != current:
+                conn.execute('UPDATE projects SET name = ? WHERE name = ?', (name, current))
+                conn.execute('UPDATE cards SET project = ?, color = (SELECT color FROM projects WHERE name = ?) WHERE project = ?',
+                             (name, name, current))
+                names[project_idx] = name
+                current = name
+        if color is not None:
+            conn.execute('UPDATE projects SET color = ? WHERE name = ?', (color, current))
+            conn.execute('UPDATE cards SET color = ? WHERE project = ?', (color or DEFAULT_CARD_COLOR, current))
 
-    _save_data(board)
+        if position is not None:
+            names.pop(project_idx)
+            names.insert(min(max(0, position), len(names)), current)
+            db.place_projects(conn, names)
+        project = _find_project(conn, current)
     return jsonify(project)
 
 
 @app.route('/api/project/<int:project_idx>', methods=['DELETE'])
 def delete_project(project_idx):
-    board = _load_data()
-    projects = _get_projects(board)
-
-    if project_idx < 0 or project_idx >= len(projects):
-        return jsonify({'error': 'project not found'}), 404
-
-    removed = projects.pop(project_idx)
-    _update_project_references(board, removed.get('name'), None)
-    _save_data(board)
+    with db.write() as conn:
+        names = db.project_names(conn)
+        if project_idx < 0 or project_idx >= len(names):
+            return jsonify({'error': 'project not found'}), 404
+        removed = names.pop(project_idx)
+        conn.execute('UPDATE cards SET project = NULL, color = ? WHERE project = ?', (DEFAULT_CARD_COLOR, removed))
+        conn.execute('DELETE FROM projects WHERE name = ?', (removed,))
+        db.place_projects(conn, names)
     return jsonify({'deleted': True})
 
 
@@ -651,5 +597,4 @@ app.register_blueprint(mcp_bp)
 
 
 if __name__ == '__main__':
-    _ensure_data_file()
     app.run(host='0.0.0.0', port=5000, debug=True)
