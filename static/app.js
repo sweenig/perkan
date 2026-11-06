@@ -1,3 +1,32 @@
+// Tag every change made from the browser so card history can tell the UI from API/MCP callers.
+(function(){
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = (url, opts) => {
+    if (typeof url === 'string' && url.startsWith('/api/') && opts && opts.method && opts.method !== 'GET') {
+      opts = Object.assign({}, opts, {headers: Object.assign({'X-Perkan-Source': 'ui'}, opts.headers || {})});
+    }
+    return nativeFetch(url, opts);
+  };
+})();
+// Day of an ISO timestamp for display. Backfilled dates are midnight UTC, so show them as written;
+// real timestamps show in the viewer's local time.
+function fmtDay(iso){
+  if(!iso) return '';
+  if(iso.endsWith('T00:00:00Z')) return iso.slice(0, 10);
+  return new Date(iso).toLocaleDateString('sv-SE');
+}
+// Compact age of a timestamp: 5m, 3h, 12d.
+function fmtAge(iso){
+  const mins = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
+  if(mins < 60) return mins + 'm';
+  if(mins < 60 * 24) return Math.floor(mins / 60) + 'h';
+  return Math.floor(mins / (60 * 24)) + 'd';
+}
+function fmtDateTime(iso){
+  if(!iso) return '';
+  if(iso.endsWith('T00:00:00Z')) return iso.slice(0, 10);
+  return new Date(iso).toLocaleString('sv-SE').slice(0, 16);
+}
 let latestBoard = null;
 let activeProjectFilter = null;
 let cardTruncationEnabled = localStorage.getItem('cardTruncationEnabled') !== 'false';
@@ -285,12 +314,16 @@ function createCardElement(card, projectMap) {
   el.draggable = true;
   el.dataset.id = card.id;
   el.dataset.order = card.order !== undefined ? card.order : 0;
+  const dateLine = [card.started_at ? 'Started ' + fmtDay(card.started_at) : '',
+                    card.completed_at ? 'Completed ' + fmtDay(card.completed_at) : ''].filter(Boolean).join(' · ');
   el.innerHTML = `
     <div class="card-title">${escapeHtml(card.title)}</div>
     <div class="card-desc">${escapeHtmlWithBr(card.description || '')}</div>
+    ${dateLine ? `<div class="card-dates">${dateLine}</div>` : ''}
     <div class="card-footer">
       <div class="card-footer-left">
         ${linkCount > 0 ? `<div class="card-links" title="${linkCount} link${linkCount!==1?'s':''}">🔗 ${linkCount}</div>` : ''}
+        ${card.column_since ? `<div class="card-age" title="In this column since ${fmtDateTime(card.column_since)}">⏱ ${fmtAge(card.column_since)}</div>` : ''}
       </div>
       <div class="card-footer-center">
         ${projectName || assignee ? `
@@ -642,6 +675,10 @@ async function renderStatusSettings(){
         <input class="col-hidden" type="checkbox" data-id="${col.id}" ${col.hidden ? 'checked' : ''} />
         Hide
       </label>
+      <label class="col-hide-toggle" title="Cards moved into this column get a completion date">
+        <input class="col-done" type="checkbox" data-id="${col.id}" ${col.is_done ? 'checked' : ''} />
+        Done
+      </label>
       <button class="col-up" data-id="${col.id}" data-idx="${idx}" ${idx===0? 'disabled':''}>↑</button>
       <button class="col-down" data-id="${col.id}" data-idx="${idx}" ${idx===board.columns.length-1? 'disabled':''}>↓</button>
       <button class="col-delete" data-id="${col.id}">Delete</button>
@@ -667,6 +704,14 @@ async function renderStatusSettings(){
       await fetch('/api/column/' + id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({color})});
       render();
       renderStatusSettings();
+    });
+  });
+  document.querySelectorAll('.col-done').forEach(inp=>{
+    inp.addEventListener('change', async (e)=>{
+      const id = e.target.dataset.id;
+      const is_done = e.target.checked;
+      await fetch('/api/column/' + id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({is_done})});
+      render();
     });
   });
   document.querySelectorAll('.col-hidden').forEach(inp=>{
@@ -1229,6 +1274,7 @@ cardEditModal.innerHTML = `
       <input id="editCardAssignee" class="modal-input" placeholder="Assignee (optional)" />
       <label>Description:</label>
       <textarea id="editCardDesc" placeholder="Description (optional)"></textarea>
+      <div id="editCardTimeline" class="timeline-section" style="display:none"></div>
       <div class="links-section">
         <div class="links-header">
           <span>Links</span>
@@ -1311,6 +1357,34 @@ document.getElementById('addLinkRowBtn').addEventListener('click', () => {
     container.appendChild(createLinkRowElement({}));
   }
 });
+async function renderCardTimeline(card, isNew){
+  const box = document.getElementById('editCardTimeline');
+  box.style.display = 'none';
+  box.innerHTML = '';
+  if(isNew || !card.id) return;
+  try {
+    const res = await fetch('/api/card/' + card.id + '/history');
+    if(!res.ok) return;
+    const h = await res.json();
+    if(document.getElementById('cardEditModal').dataset.cardId !== card.id) return;   // modal moved on
+    const titles = {};
+    ((latestBoard && latestBoard.columns) || []).forEach(c => { titles[c.id] = c.title; });
+    const name = id => id ? escapeHtml(titles[id] || id) : '—';
+    const rows = h.history.map(e =>
+      `<li><span class="tl-at">${fmtDateTime(e.at)}</span> ${e.from ? name(e.from) + ' → ' : 'Created in '}${name(e.to)}` +
+      `<span class="tl-src">${escapeHtml(e.source)}</span></li>`).join('');
+    box.innerHTML = `
+      <div class="timeline-header"><span>Timeline</span></div>
+      <div class="timeline-dates">
+        <span>Created: <b>${h.created_at ? fmtDay(h.created_at) : '—'}</b></span>
+        <span>Started: <b>${h.started_at ? fmtDay(h.started_at) : '—'}</b></span>
+        <span>Completed: <b>${h.completed_at ? fmtDay(h.completed_at) : '—'}</b></span>
+      </div>
+      ${h.column_since ? `<div class="timeline-dates"><span>In ${name(h.column)} since <b>${fmtDay(h.column_since)}</b></span></div>` : ''}
+      ${rows ? `<ul class="timeline-list">${rows}</ul>` : '<small class="link-hint">No column changes recorded yet.</small>'}`;
+    box.style.display = '';
+  } catch(err) { /* history is informational; the modal works without it */ }
+}
 async function openCardEditModal(card, isNew = false){
   if(!latestBoard){
     await fetchBoard();
@@ -1324,6 +1398,7 @@ async function openCardEditModal(card, isNew = false){
   const editProjectInput = document.getElementById('editCardProject');
   populateProjectInput(editProjectInput, card.project || '');
   renderLinkRows(card.links || []);
+  renderCardTimeline(card, isNew);
 
   // Update title with more prominent styling
   const titleEl = document.getElementById('editCardModalTitle');

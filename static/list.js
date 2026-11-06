@@ -141,6 +141,14 @@ function listCreateTableRow(card, index, projectMap) {
   `;
   row.appendChild(columnCell);
 
+  // Started / completed dates
+  [card.started_at, card.completed_at].forEach(iso => {
+    const dateCell = document.createElement('td');
+    dateCell.className = 'list-cell list-cell-date';
+    dateCell.innerHTML = iso ? `<div class="list-cell-content">${listEscapeHtml(fmtDay(iso))}</div>` : '<span class="list-muted">—</span>';
+    row.appendChild(dateCell);
+  });
+
   // Links button
   const linksCell = document.createElement('td');
   linksCell.className = 'list-cell list-cell-links';
@@ -342,7 +350,7 @@ async function listRender(options = {}) {
   const headerRow = document.createElement('tr');
   headerRow.className = 'list-table-header';
 
-  const headers = ['Title', 'Description', 'Project', 'Assignee', 'Status', '', ''];
+  const headers = ['Title', 'Description', 'Project', 'Assignee', 'Status', 'Started', 'Completed', '', ''];
   headers.forEach(headerText => {
     const th = document.createElement('th');
     th.className = 'list-table-header-cell';

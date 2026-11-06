@@ -214,3 +214,13 @@ body.list-view-page{min-height:100vh}
 .list-drop-zone{background-color:rgba(183,142,245,0.08);border:2px dashed rgba(183,142,245,0.45);transition:all 0.12s ease}
 .list-drop-zone.dragover{background-color:rgba(183,142,245,0.2);border-color:#b78ef5}
 .list-drop-zone-cell{padding:16px 12px;text-align:center;color:rgba(183,142,245,0.7);font-size:13px;font-weight:600}
+.card .card-dates{font-size:12px;color:#6b6b6b;margin-top:6px}
+.timeline-section{margin-top:12px;border-top:1px solid rgba(128,128,128,0.3);padding-top:8px}
+.timeline-header{font-weight:600;margin-bottom:4px}
+.timeline-dates{display:flex;gap:16px;font-size:13px;margin-bottom:6px}
+.timeline-list{list-style:none;margin:0;padding:0;font-size:12px;max-height:130px;overflow-y:auto}
+.timeline-list li{padding:2px 0}
+.timeline-list .tl-at{color:#6b6b6b;margin-right:6px;font-variant-numeric:tabular-nums}
+.timeline-list .tl-src{margin-left:8px;color:#8a8a8a;font-size:11px}
+.card .card-age{font-size:12px;color:#4b4b4b;background:rgba(0,0,0,0.05);padding:2px 8px;border-radius:14px;font-weight:600;white-space:nowrap}
+.card .card-links + .card-age{margin-left:6px}

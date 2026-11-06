@@ -20,7 +20,7 @@ DEFAULT_BOARD = {
     {"id": "todo", "title": "To Do", "cards": [], "color": "#1f77b4", "hidden": False},
     {"id": "inprogress", "title": "In Progress", "cards": [], "color": "#ff8c00", "hidden": False},
     {"id": "blocked", "title": "Blocked", "cards": [], "color": "#d62728", "hidden": False},
-    {"id": "done", "title": "Done", "cards": [], "color": "#2ca02c", "hidden": False}
+    {"id": "done", "title": "Done", "cards": [], "color": "#2ca02c", "hidden": False, "is_done": True}
     ],
     "projects": []
 }
@@ -42,6 +42,9 @@ def _sanitize_card(card):
         sanitized['assignee'] = assignee
     color = card.get('color')
     sanitized['color'] = color if color else DEFAULT_CARD_COLOR
+    created_at = card.get('created_at')
+    if isinstance(created_at, str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', created_at):
+        sanitized['created_at'] = created_at
     order = card.get('order')
     if order is not None:
         try:
@@ -92,6 +95,7 @@ def _normalize_board(data):
         title = str(col.get('title') or '').strip() or 'Untitled'
         color = col.get('color') or '#9aa0a6'
         hidden = bool(col.get('hidden', False))
+        is_done = _truthy(col['is_done']) if 'is_done' in col else title.lower().startswith('done')
         cards_payload = col.get('cards') if isinstance(col.get('cards'), list) else []
         normalized_cards = []
         for card in cards_payload:
@@ -102,7 +106,8 @@ def _normalize_board(data):
                 sanitized['id'] = str(uuid.uuid4())
             seen_ids.add(sanitized['id'])
             normalized_cards.append(sanitized)
-        normalized_columns.append({'id': col_id, 'title': title, 'color': color, 'hidden': hidden, 'cards': normalized_cards})
+        normalized_columns.append({'id': col_id, 'title': title, 'color': color, 'hidden': hidden, 'is_done': is_done,
+                                   'cards': normalized_cards})
 
     _ensure_global_orders(normalized_columns)
 
@@ -120,6 +125,11 @@ def _normalize_board(data):
     data['columns'] = normalized_columns
     data['projects'] = normalized_projects
     return data
+
+
+def _source():
+    """Who made this change: the X-Perkan-Source header (ui, mcp, ...) or 'api'."""
+    return (request.headers.get('X-Perkan-Source') or 'api').strip()[:20] or 'api'
 
 
 def _finite_or_none(value):
@@ -204,6 +214,8 @@ def _merge_boards(existing, incoming):
             target['title'] = inc_col.get('title', target['title'])
             target['color'] = inc_col.get('color', target.get('color'))
             target['hidden'] = bool(inc_col.get('hidden', target.get('hidden', False)))
+            if 'is_done' in inc_col:
+                target['is_done'] = _truthy(inc_col['is_done'])
             existing_ids = {card['id'] for card in target.get('cards', [])}
             for card in inc_col.get('cards', []):
                 sanitized = _sanitize_card(card)
@@ -352,7 +364,10 @@ def create_card():
             card['order'] = db.order_for_position(conn, column_id, position)
         else:
             card['order'] = db.end_order(conn)   # default: after everything else
+        card['created_at'] = db.now_iso()
         db.insert_card(conn, column_id, card)
+        db.record_move(conn, card['id'], None, column_id, _source(), at=card['created_at'])
+        card, _col = db.get_card(conn, card['id'])
         return jsonify(card), 201
 
 
@@ -420,7 +435,53 @@ def update_card(card_id):
         # else: a plain column move keeps the card's order, so relative positions survive moves
 
         db.update_card_row(conn, card_obj, destination_column_id)
+        if destination_column_id != original_column_id:
+            db.record_move(conn, card_id, original_column_id, destination_column_id, _source())
+        card_obj, _col = db.get_card(conn, card_id)
         return jsonify(card_obj)
+
+
+@app.route('/api/stats', methods=['GET'])
+def stats():
+    """Durations in days per card (backlog, work, lead, time in current column) with summaries.
+    Filters: project, created_since, completed_since (yyyy-mm-dd or ISO). cards=false leaves out the per-card rows."""
+    args = request.args
+
+    def bound(name):
+        value = (args.get(name) or '').strip()
+        if not value:
+            return None, None
+        if re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
+            value += 'T00:00:00Z'
+        if not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', value):
+            return None, f'{name} must be yyyy-mm-dd or an ISO UTC timestamp'
+        return value, None
+
+    created_since, err = bound('created_since')
+    if err:
+        return jsonify({'error': err}), 400
+    completed_since, err = bound('completed_since')
+    if err:
+        return jsonify({'error': err}), 400
+    with db.read() as conn:
+        result = db.card_stats(conn, project=args.get('project') or None,
+                               created_since=created_since, completed_since=completed_since)
+    if args.get('cards') is not None and not _truthy(args.get('cards')):
+        result.pop('cards')
+    return jsonify(result)
+
+
+@app.route('/api/card/<card_id>/history', methods=['GET'])
+def card_history(card_id):
+    """Column-change history, oldest first, plus the dates derived from it."""
+    with db.read() as conn:
+        card, column_id = db.get_card(conn, card_id)
+        if card is None:
+            return jsonify({'error': 'card not found'}), 404
+        history = db.card_history(conn, card_id)
+    return jsonify({'id': card_id, 'column': column_id, 'created_at': card.get('created_at'),
+                    'started_at': card.get('started_at'), 'completed_at': card.get('completed_at'),
+                    'column_since': card.get('column_since'), 'history': history})
 
 
 @app.route('/api/card/<card_id>', methods=['DELETE'])
@@ -453,20 +514,22 @@ def create_column():
         s = re.sub(r'[^a-z0-9]+', '-', s).strip('-')
         return s or str(uuid.uuid4())
 
-    hidden = bool(data.get('hidden', False))
+    hidden = _truthy(data.get('hidden', False))
+    is_done = _truthy(data.get('is_done', False))
     with db.write() as conn:
         ids = db.column_ids(conn)
         col_id = _slug(title)
         if col_id in ids:
             col_id = f"{col_id}-{str(uuid.uuid4())[:8]}"
-        conn.execute('INSERT INTO columns (id, title, color, hidden, position) VALUES (?,?,?,?,?)',
-                     (col_id, title, color, 1 if hidden else 0, len(ids)))
+        conn.execute('INSERT INTO columns (id, title, color, hidden, position, is_done) VALUES (?,?,?,?,?,?)',
+                     (col_id, title, color, 1 if hidden else 0, len(ids), 1 if is_done else 0))
         if position is not None and position < len(ids):
             ids.insert(max(0, position), col_id)
         else:
             ids.append(col_id)
         db.place_columns(conn, ids)
-    return jsonify({'id': col_id, 'title': title, 'cards': [], 'color': color, 'hidden': hidden}), 201
+    return jsonify({'id': col_id, 'title': title, 'cards': [], 'color': color, 'hidden': hidden,
+                    'is_done': is_done}), 201
 
 
 @app.route('/api/column/<col_id>', methods=['PUT'])
@@ -476,6 +539,7 @@ def update_column(col_id):
     position = _int_or_none(data.get('position'))
     color = data.get('color')
     hidden = data.get('hidden')
+    is_done = data.get('is_done')
     with db.write() as conn:
         ids = db.column_ids(conn)
         if col_id not in ids:
@@ -486,6 +550,8 @@ def update_column(col_id):
             conn.execute('UPDATE columns SET color = ? WHERE id = ?', (color, col_id))
         if hidden is not None:
             conn.execute('UPDATE columns SET hidden = ? WHERE id = ?', (1 if hidden else 0, col_id))
+        if is_done is not None:
+            conn.execute('UPDATE columns SET is_done = ? WHERE id = ?', (1 if _truthy(is_done) else 0, col_id))
         if position is not None:
             ids.remove(col_id)
             ids.insert(min(max(0, position), len(ids)), col_id)
@@ -504,6 +570,8 @@ def delete_column(col_id):
             return jsonify({'error': 'column not found'}), 404
         ids.remove(col_id)
         if move_to and move_to in ids:
+            for (cid,) in conn.execute('SELECT id FROM cards WHERE column_id = ?', (col_id,)).fetchall():
+                db.record_move(conn, cid, col_id, move_to, _source())
             conn.execute('UPDATE cards SET column_id = ? WHERE column_id = ?', (move_to, col_id))  # order values are kept
         conn.execute('DELETE FROM columns WHERE id = ?', (col_id,))  # cascades to any cards left behind
         db.place_columns(conn, ids)

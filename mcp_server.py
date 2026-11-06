@@ -28,6 +28,10 @@ def _obj(props, required=None):
 _HIDDEN = {'include_hidden': {'type': 'boolean',
                               'description': 'Also include hidden columns (and their cards). Off by default.'}}
 
+_DONE = {'type': 'boolean',
+         'description': 'True for a done column: moving a card into it (from a non-done column) sets '
+                        "the card's completed_at."}
+
 _LINKS = {
     'type': 'array',
     'description': 'Links attached to the card.',
@@ -41,7 +45,8 @@ _LINKS = {
 
 def _api(method, path, body=None):
     client = current_app.test_client()
-    resp = client.open(path, method=method, json=body if body is not None else None)
+    resp = client.open(path, method=method, json=body if body is not None else None,
+                       headers={'X-Perkan-Source': 'mcp'})
     try:
         payload = resp.get_json(silent=True)
     except Exception:
@@ -81,6 +86,14 @@ def _tool_update_card(args):
     if not card_id:
         return 400, {'error': 'id required'}
     return _api('PUT', f'/api/card/{card_id}', args)
+
+
+def _tool_get_card_history(args):
+    return _api('GET', f"/api/card/{args.get('id', '')}/history")
+
+
+def _tool_get_card_stats(args):
+    return _api('GET', _with_query('/api/stats', args, ['project', 'created_since', 'completed_since', 'cards']))
 
 
 def _tool_delete_card(args):
@@ -169,15 +182,32 @@ TOOLS = [
            'position': {'type': 'integer', 'description': 'Index among the destination column\'s other cards (0 = top).'},
            'project': _STR, 'assignee': _STR, 'color': _STR, 'links': _LINKS}, ['id']),
      _tool_update_card),
+    ('get_card_history', "A card's column-change history, oldest first (from/to column ids, UTC timestamp, "
+                         "source), plus created_at, started_at, completed_at and column_since. started_at is the first move to another "
+                         "column; completed_at is when the card last entered a done column (absent while it "
+                         "is outside every done column). Cards also carry started_at/completed_at in "
+                         "list_cards and get_board.", _obj({'id': _STR}, ['id']), _tool_get_card_history),
+    ('get_card_stats', 'Durations in days per card plus summaries (n, avg, median, min, max). backlog_days = '
+                       'created to started; work_days = started to completed; lead_days = created to completed; '
+                       'in_column_days = time in the current column for cards not in a done column '
+                       '(e.g. how long cards have been in Burn-In). Also returns by_project summaries and '
+                       'open_by_column. A metric is missing for a card when a timestamp it needs was never '
+                       'recorded (cards from before history). Cards carry created_at, started_at, completed_at '
+                       'and column_since in list_cards and get_board too.',
+     _obj({'project': _STR,
+           'created_since': dict(_STR, description='Only cards created on/after this date (yyyy-mm-dd).'),
+           'completed_since': dict(_STR, description='Only cards completed on/after this date (yyyy-mm-dd).'),
+           'cards': {'type': 'boolean', 'description': 'false returns summaries only (default true).'}}),
+     _tool_get_card_stats),
     ('delete_card', 'Delete a card by id.', _obj({'id': _STR}, ['id']), _tool_delete_card),
-    ('list_columns', 'List columns (id, title, color, hidden) without cards. Hidden columns are left out '
+    ('list_columns', 'List columns (id, title, color, hidden, is_done) without cards. Hidden columns are left out '
                      'unless include_hidden is true.', _obj(_HIDDEN), _tool_list_columns),
-    ('create_column', 'Create a column.',
-     _obj({'title': _STR, 'color': _STR, 'hidden': {'type': 'boolean'},
+    ('create_column', 'Create a column. Set is_done for a column that holds finished cards.',
+     _obj({'title': _STR, 'color': _STR, 'hidden': {'type': 'boolean'}, 'is_done': _DONE,
            'position': {'type': 'integer'}}, ['title']),
      _tool_create_column),
-    ('update_column', 'Rename, recolor, hide/show, or reposition a column.',
-     _obj({'id': _STR, 'title': _STR, 'color': _STR, 'hidden': {'type': 'boolean'},
+    ('update_column', 'Rename, recolor, hide/show, mark as a done column, or reposition a column.',
+     _obj({'id': _STR, 'title': _STR, 'color': _STR, 'hidden': {'type': 'boolean'}, 'is_done': _DONE,
            'position': {'type': 'integer'}}, ['id']),
      _tool_update_column),
     ('delete_column', 'Delete a column. Optionally move its cards to another column first; otherwise they are deleted.',

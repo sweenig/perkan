@@ -48,11 +48,24 @@ Every card has one global `order` value (unique, lowest first). A column shows i
 
 `python -m unittest discover -s tests -v` (needs Flask; uses a temporary data directory).
 
+## Card dates and history
+
+Every column change is recorded in `card_history` (card, from column, to column, UTC time, source: `ui`, `mcp` or `api`). Creating a card records its first row. Cards carry two derived dates (omitted when empty):
+
+- `started_at`: the first time the card was moved to another column.
+- `completed_at`: when the card last entered a done column (`is_done` on the column) from a non-done one. Moving between done columns keeps it; moving out clears it, and re-entering sets a new one.
+
+Cards also carry `created_at` (set once, when the card is created; never changed by moves) and `column_since` (when the card entered its current column). Cards that predate history have none of these dates.
+
+`GET /api/card/<id>/history` returns the history, oldest first. Existing cards in done columns were backfilled from a `DONE yyyy-mm-dd` line in their description (history source `backfill`, no `started_at`). Columns titled "Done..." were flagged `is_done` on upgrade; toggle it per column in settings, or with `is_done` on `create_column` / `update_column`. Replace-mode import clears history for cards that no longer exist and keeps it for ids that survive.
+
+`GET /api/stats` (MCP: `get_card_stats`) reports durations in days per card, with n / avg / median / min / max summaries overall and per project: `backlog_days` (created to started), `work_days` (started to completed), `lead_days` (created to completed), plus `in_column_days` and `open_by_column` for cards not yet done (for example how long cards have sat in Burn-In). Filters: `project`, `created_since`, `completed_since`; `cards=false` returns summaries only. Cards with no recorded dates are left out.
+
 ## MCP server
 
 PerKan exposes an [MCP](https://modelcontextprotocol.io) server at `POST /mcp` (Streamable HTTP, stateless, JSON responses). It shares the web app's process and data, and like the rest of the app it has no authentication.
 
-Tools: `get_board`, `list_cards` (with `limit`/`offset`), `create_card`, `update_card` (also moves cards), `delete_card`, `list_columns`, `create_column`, `update_column`, `delete_column`, `list_projects`, `create_project`, `update_project`, `delete_project`. Each calls the matching `/api/*` route, so behavior is identical to the UI.
+Tools: `get_board`, `list_cards` (with `limit`/`offset`), `create_card`, `update_card` (also moves cards), `get_card_history`, `delete_card`, `list_columns`, `create_column`, `update_column`, `delete_column`, `list_projects`, `create_project`, `update_project`, `delete_project`. Each calls the matching `/api/*` route, so behavior is identical to the UI.
 
 Connect from Claude Code:
 

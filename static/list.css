@@ -80,6 +80,11 @@
   min-width: 120px;
 }
 
+.list-cell-date {
+  min-width: 100px;
+  white-space: nowrap;
+}
+
 .list-project-badge,
 .list-column-badge {
   display: inline-block;

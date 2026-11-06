@@ -37,6 +37,7 @@ def board_fixture():
 class Base(unittest.TestCase):
     def setUp(self):
         with db.write() as conn:
+            conn.execute('DELETE FROM card_history')   # replace_board keeps history of surviving card ids
             db.replace_board(conn, perkan._normalize_board(board_fixture()))
         self.c = perkan.app.test_client()
 
@@ -274,6 +275,166 @@ class McpTests(Base):
         self.assert_invariants()
 
 
+class HistoryTests(Base):
+    def test_create_records_history_but_no_dates(self):
+        card = self.post(title='x', column='todo')
+        self.assertNotIn('started_at', card)
+        self.assertNotIn('completed_at', card)
+        h = self.get(f"/api/card/{card['id']}/history")
+        self.assertEqual([(e['from'], e['to']) for e in h['history']], [(None, 'todo')])
+
+    def test_first_move_starts_and_move_into_done_completes(self):
+        self.put('t1', column='doing')
+        c = self.get('/api/cards?query=t1')['cards'][0]
+        self.assertIn('started_at', c)
+        self.assertNotIn('completed_at', c)
+        moved = self.put('t1', column='done')
+        self.assertIn('completed_at', moved)
+        h = self.get('/api/card/t1/history')
+        self.assertEqual([(e['from'], e['to']) for e in h['history']], [('todo', 'doing'), ('doing', 'done')])
+
+    def test_move_between_done_columns_keeps_completion(self):
+        with db.write() as conn:
+            conn.execute("INSERT INTO columns (id,title,color,hidden,position,is_done) VALUES ('done2','Done 1','#1',1,9,1)")
+        done = self.put('t1', column='done')['completed_at']
+        db_rows = self.get('/api/card/t1/history')['history']
+        again = self.put('t1', column='done2')
+        self.assertEqual(again['completed_at'], done)
+        self.assertEqual(len(self.get('/api/card/t1/history')['history']), len(db_rows) + 1)
+
+    def test_moving_out_of_done_clears_completion_and_reentry_resets_it(self):
+        self.put('t1', column='done')
+        out = self.put('t1', column='doing')
+        self.assertNotIn('completed_at', out)
+        with db.write() as conn:   # make the re-entry distinguishable from the first one
+            conn.execute("UPDATE card_history SET at = '2020-01-01T00:00:00Z'")
+        again = self.put('t1', column='done')
+        self.assertGreater(again['completed_at'], '2020-01-01T00:00:00Z')
+
+    def test_plain_edit_records_nothing(self):
+        self.put('t1', title='renamed')
+        self.assertEqual(self.get('/api/card/t1/history')['history'], [])
+
+    def test_source_header(self):
+        r = self.c.put('/api/card/t1', json={'column': 'doing'}, headers={'X-Perkan-Source': 'ui'})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.get('/api/card/t1/history')['history'][0]['source'], 'ui')
+
+    def test_delete_column_move_to_records_moves(self):
+        r = self.c.delete('/api/column/doing', json={'move_to': 'done'})
+        self.assertEqual(r.status_code, 200)
+        c = self.get('/api/cards?query=d1')['cards'][0]
+        self.assertIn('completed_at', c)
+
+    def test_history_of_unknown_card_is_404(self):
+        self.assertEqual(self.c.get('/api/card/nope/history').status_code, 404)
+
+    def test_column_is_done_flag(self):
+        cols = {c['id']: c for c in self.get('/api/columns?include_hidden=true')['columns']}
+        self.assertTrue(cols['done']['is_done'])          # title starts with "Done"
+        self.assertFalse(cols['todo']['is_done'])
+        r = self.c.put('/api/column/doing', json={'is_done': True})
+        self.assertTrue(r.get_json()['is_done'])
+        r = self.c.post('/api/column', json={'title': 'Shipped', 'is_done': True})
+        self.assertTrue(r.get_json()['is_done'])
+
+    def test_backfill_from_description(self):
+        b = board_fixture()
+        b['columns'][2]['cards'] = [
+            {'id': 'x1', 'title': 'X', 'description': 'work\nDONE 2026-11-04', 'order': 9e6},
+            {'id': 'x2', 'title': 'Y', 'description': 'no date', 'order': 9.5e6}]
+        with db.write() as conn:
+            db.replace_board(conn, perkan._normalize_board(b))
+        cards = {c['id']: c for c in self.get('/api/cards')['cards']}
+        self.assertEqual(cards['x1']['completed_at'], '2026-11-04T00:00:00Z')
+        self.assertNotIn('started_at', cards['x1'])
+        self.assertNotIn('completed_at', cards['x2'])
+
+    def test_merge_import_keeps_history(self):
+        self.put('t1', column='done')
+        r = self.c.post('/api/board/import', data={'mode': 'merge', 'file': (io.BytesIO(b'{"columns": []}'), 'b.json')},
+                        content_type='multipart/form-data')
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertIn('completed_at', self.get('/api/cards?query=t1')['cards'][0])
+
+    def test_mcp_tool_lists_history(self):
+        self.put('t1', column='doing')
+        r = self.c.post('/mcp', json={'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+                                      'params': {'name': 'get_card_history', 'arguments': {'id': 't1'}}})
+        hist = r.get_json()['result']['structuredContent']['history']
+        self.assertEqual([(e['to'], e['source']) for e in hist], [('doing', 'api')])
+
+
+    def test_created_at_and_column_since(self):
+        card = self.post(title='n', column='todo')
+        self.assertEqual(card['created_at'], card['column_since'])
+        h = self.get(f"/api/card/{card['id']}/history")
+        self.assertEqual(h['history'][0]['at'], card['created_at'])
+        with db.write() as conn:
+            conn.execute("UPDATE card_history SET at='2026-01-01T00:00:00Z' WHERE card_id=?", (card['id'],))
+        self.put(card['id'], title='renamed')                    # a plain edit does not reset anything
+        c = self.get(f"/api/cards?query=renamed")['cards'][0]
+        self.assertEqual(c['column_since'], '2026-01-01T00:00:00Z')
+        moved = self.put(card['id'], column='doing')
+        self.assertGreater(moved['column_since'], '2026-01-01T00:00:00Z')
+        self.assertEqual(moved['created_at'], card['created_at'])  # moves never touch created_at
+
+    def test_cards_from_before_history_have_no_dates(self):
+        c = self.get('/api/cards?query=t2')['cards'][0]
+        for key in ('created_at', 'started_at', 'completed_at', 'column_since'):
+            self.assertNotIn(key, c)
+
+    def test_stats_durations(self):
+        a = self.post(title='A', column='todo', project='P')['id']
+        b = self.post(title='B', column='todo')['id']
+        self.put(a, column='doing')
+        self.put(a, column='done')
+        with db.write() as conn:
+            conn.execute("UPDATE cards SET created_at='2026-01-01T00:00:00Z' WHERE id=?", (a,))
+            ids = [r['id'] for r in conn.execute('SELECT id FROM card_history WHERE card_id=? ORDER BY id', (a,))]
+            for hid, at in zip(ids, ['2026-01-01T00:00:00Z', '2026-01-04T00:00:00Z', '2026-01-06T12:00:00Z']):
+                conn.execute('UPDATE card_history SET at=? WHERE id=?', (at, hid))
+            conn.execute("UPDATE cards SET created_at='2026-01-10T00:00:00Z' WHERE id=?", (b,))
+            conn.execute("UPDATE card_history SET at='2026-01-10T00:00:00Z' WHERE card_id=?", (b,))
+            st = db.card_stats(conn, now='2026-01-12T12:00:00Z')
+        rows = {r['id']: r for r in st['cards']}
+        self.assertEqual((rows[a]['backlog_days'], rows[a]['work_days'], rows[a]['lead_days']), (3.0, 2.5, 5.5))
+        self.assertNotIn('in_column_days', rows[a])                 # done cards are not "waiting"
+        self.assertEqual(rows[b]['in_column_days'], 2.5)
+        self.assertNotIn('backlog_days', rows[b])                   # not started yet
+        self.assertEqual(st['summary']['lead_days']['n'], 1)
+        self.assertEqual(st['summary']['completed'], 1)
+        self.assertEqual(st['by_project']['P']['work_days']['avg'], 2.5)
+        self.assertEqual(st['open_by_column']['todo']['max'], 2.5)
+
+    def test_stats_endpoint_filters(self):
+        a = self.post(title='A', column='todo', project='P')['id']
+        self.post(title='B', column='todo')
+        self.put(a, column='done')
+        everything = self.get('/api/stats')
+        self.assertEqual(len(everything['cards']), 2)             # fixture cards predate history, so they are left out
+        only = self.get('/api/stats?project=P&cards=false')
+        self.assertNotIn('cards', only)
+        self.assertEqual(only['summary']['cards'], 1)
+        self.assertEqual(self.get('/api/stats?completed_since=2999-01-01')['summary']['cards'], 0)
+        self.assertEqual(self.c.get('/api/stats?created_since=yesterday').status_code, 400)
+
+    def test_merge_import_keeps_created_at(self):
+        card = self.post(title='keep', column='todo')
+        r = self.c.post('/api/board/import', data={'mode': 'merge', 'file': (io.BytesIO(b'{"columns": []}'), 'b.json')},
+                        content_type='multipart/form-data')
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(self.get('/api/cards?query=keep')['cards'][0]['created_at'], card['created_at'])
+
+    def test_mcp_stats_tool(self):
+        self.post(title='A', column='todo')
+        r = self.c.post('/mcp', json={'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+                                      'params': {'name': 'get_card_stats', 'arguments': {'cards': False}}})
+        out = r.get_json()['result']['structuredContent']
+        self.assertNotIn('cards', out)
+        self.assertEqual(out['summary']['cards'], 1)
+
+
 class MigrationTests(unittest.TestCase):
     def test_v1_database_gets_one_global_order(self):
         """A v1 database (per-column order + array position) is renumbered into the order the
@@ -316,7 +477,7 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual([c[0] for c in cards], ['a2', 'b1', 'b2', 'a1', 'h1'])
         self.assertEqual([c[1] for c in cards], [1e6, 2e6, 3e6, 4e6, 5e6])
         self.assertEqual(json.loads(out[1]), [{'text': 'x', 'url': 'http://x'}])   # links survive the schema change
-        self.assertEqual(out[2], '2')
+        self.assertEqual(out[2], str(db.SCHEMA_VERSION))
 
 
 if __name__ == '__main__':
