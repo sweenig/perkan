@@ -1794,3 +1794,68 @@ const boardEl = document.getElementById('board');
 if(boardEl){
   render();
 }
+
+// Auto repaint: every 15s re-fetch the board and repaint if something changed
+// elsewhere (MCP tools, another tab). Skips while the tab is hidden, while a
+// card is being dragged, or while any modal/dropdown is open, and keeps scroll.
+const AUTO_REPAINT_INTERVAL_MS = 15000;
+let autoRepaintInFlight = false;
+
+function autoRepaintBusy(){
+  if(document.visibilityState !== 'visible') return true;
+  if(draggedCardId || (typeof listDraggedCardId !== 'undefined' && listDraggedCardId)) return true;
+  if(document.querySelector('.modal:not(.hidden), .split-modal:not(.hidden), .project-picker-dropdown:not(.hidden)')) return true;
+  const ae = document.activeElement;
+  if(ae && ['INPUT','TEXTAREA','SELECT'].includes(ae.tagName)) return true;
+  return false;
+}
+
+function captureScrollState(){
+  const state = {win: [window.scrollX, window.scrollY], cols: {}, board: null, list: null};
+  const boardEl = document.getElementById('board');
+  if(boardEl) state.board = boardEl.scrollLeft;
+  const listEl = document.getElementById('listView');
+  if(listEl) state.list = listEl.scrollTop;
+  document.querySelectorAll('.column').forEach(c => {
+    const l = c.querySelector('.card-list');
+    if(l) state.cols[c.dataset.column] = l.scrollTop;
+  });
+  return state;
+}
+
+function restoreScrollState(state){
+  const boardEl = document.getElementById('board');
+  if(boardEl && state.board !== null) boardEl.scrollLeft = state.board;
+  const listEl = document.getElementById('listView');
+  if(listEl && state.list !== null) listEl.scrollTop = state.list;
+  document.querySelectorAll('.column').forEach(c => {
+    const l = c.querySelector('.card-list');
+    if(l && state.cols[c.dataset.column] !== undefined) l.scrollTop = state.cols[c.dataset.column];
+  });
+  window.scrollTo(state.win[0], state.win[1]);
+}
+
+async function autoRepaint(){
+  if(autoRepaintInFlight || autoRepaintBusy()) return;
+  const isList = !!document.getElementById('listView');
+  if(!isList && !document.getElementById('board')) return;
+  autoRepaintInFlight = true;
+  try{
+    const prev = JSON.stringify(isList ? listLatestBoard : latestBoard);
+    const next = isList ? await listFetchBoard() : await fetchBoard();
+    // state may have changed while the fetch was in flight
+    if(autoRepaintBusy() || JSON.stringify(next) === prev) return;
+    const scroll = captureScrollState();
+    if(isList) await listRender({useLatest: true}); else await render({useLatest: true});
+    restoreScrollState(scroll);
+  }catch(err){
+    console.warn('Auto repaint failed', err);
+  }finally{
+    autoRepaintInFlight = false;
+  }
+}
+
+setInterval(autoRepaint, AUTO_REPAINT_INTERVAL_MS);
+document.addEventListener('visibilitychange', () => {
+  if(document.visibilityState === 'visible') autoRepaint();
+});
