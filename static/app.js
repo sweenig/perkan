@@ -679,6 +679,10 @@ async function renderStatusSettings(){
         <input class="col-done" type="checkbox" data-id="${col.id}" ${col.is_done ? 'checked' : ''} />
         Done
       </label>
+      <label class="col-hide-toggle" title="The done column new finished cards go to (only one; setting it clears the others)">
+        <input class="col-current-done" type="radio" name="col-current-done" data-id="${col.id}" ${col.is_current_done ? 'checked' : ''} />
+        Current
+      </label>
       <button class="col-up" data-id="${col.id}" data-idx="${idx}" ${idx===0? 'disabled':''}>↑</button>
       <button class="col-down" data-id="${col.id}" data-idx="${idx}" ${idx===board.columns.length-1? 'disabled':''}>↓</button>
       <button class="col-delete" data-id="${col.id}">Delete</button>
@@ -711,6 +715,13 @@ async function renderStatusSettings(){
       const id = e.target.dataset.id;
       const is_done = e.target.checked;
       await fetch('/api/column/' + id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({is_done})});
+      render();
+    });
+  });
+  document.querySelectorAll('.col-current-done').forEach(inp=>{
+    inp.addEventListener('change', async (e)=>{
+      const id = e.target.dataset.id;
+      await fetch('/api/column/' + id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({is_current_done:true})});
       render();
     });
   });

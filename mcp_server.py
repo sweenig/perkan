@@ -32,6 +32,9 @@ _DONE = {'type': 'boolean',
          'description': 'True for a done column: moving a card into it (from a non-done column) sets '
                         "the card's completed_at."}
 
+_SPRINT_ARG = {'type': 'string', 'description': 'Sprint id, "active" (the active sprint) or "backlog" (no sprint).'}
+_DATE = {'type': 'string', 'description': 'yyyy-mm-dd; a sprint ends at the end of its end_date.'}
+
 _LINKS = {
     'type': 'array',
     'description': 'Links attached to the card.',
@@ -68,12 +71,13 @@ def _with_query(path, args, names):
 
 
 def _tool_get_board(args):
-    return _api('GET', _with_query('/api/board', args, ['include_hidden']))
+    return _api('GET', _with_query('/api/board', args, ['include_hidden', 'include_closed']))
 
 
 def _tool_list_cards(args):
     return _api('GET', _with_query('/api/cards', args,
-                                   ['column', 'project', 'assignee', 'query', 'limit', 'offset', 'include_hidden']))
+                                   ['column', 'project', 'assignee', 'query', 'limit', 'offset', 'include_hidden',
+                                    'sprint', 'include_closed']))
 
 
 def _tool_create_card(args):
@@ -88,12 +92,58 @@ def _tool_update_card(args):
     return _api('PUT', f'/api/card/{card_id}', args)
 
 
+def _sprint_id(args):
+    args = dict(args)
+    sid = args.pop('id', None)
+    return sid, args
+
+
+def _tool_list_sprints(args):
+    return _api('GET', _with_query('/api/sprints', args, ['include_closed']))
+
+
+def _tool_create_sprint(args):
+    return _api('POST', '/api/sprint', args)
+
+
+def _tool_update_sprint(args):
+    sid, body = _sprint_id(args)
+    if not sid:
+        return 400, {'error': 'id required'}
+    return _api('PUT', f'/api/sprint/{sid}', body)
+
+
+def _tool_delete_sprint(args):
+    sid, _ = _sprint_id(args)
+    if not sid:
+        return 400, {'error': 'id required'}
+    return _api('DELETE', f'/api/sprint/{sid}')
+
+
+def _tool_start_sprint(args):
+    sid, body = _sprint_id(args)
+    if not sid:
+        return 400, {'error': 'id required'}
+    return _api('POST', f'/api/sprint/{sid}/start', body)
+
+
+def _tool_complete_sprint(args):
+    sid, body = _sprint_id(args)
+    if not sid:
+        return 400, {'error': 'id required'}
+    return _api('POST', f'/api/sprint/{sid}/complete', body)
+
+
+def _tool_get_card_sprint_history(args):
+    return _api('GET', f"/api/card/{args.get('id', '')}/sprint-history")
+
+
 def _tool_get_card_history(args):
     return _api('GET', f"/api/card/{args.get('id', '')}/history")
 
 
 def _tool_get_card_stats(args):
-    return _api('GET', _with_query('/api/stats', args, ['project', 'created_since', 'completed_since', 'cards']))
+    return _api('GET', _with_query('/api/stats', args, ['project', 'sprint', 'created_since', 'completed_since', 'cards']))
 
 
 def _tool_delete_card(args):
@@ -152,7 +202,9 @@ TOOLS = [
     ('get_board', 'Get the board: visible columns (with their cards, sorted by order) and projects. '
                   'Hidden columns are left out unless include_hidden is true. Large; prefer list_cards '
                   'with a limit when you only need a few cards.',
-     _obj(_HIDDEN), _tool_get_board),
+     _obj(dict(_HIDDEN, include_closed={'type': 'boolean', 'description': 'Also include done cards of closed '
+                                                                         'sprints (hidden by default).'})),
+     _tool_get_board),
     ('list_cards', 'List cards in global order (the "order" field, lowest first), optionally filtered and paged. '
                    'Each card includes its column id; "total" is the number of matches before limit/offset. '
                    'Use column + limit to get the top N cards of a column. Cards in hidden columns are skipped '
@@ -160,6 +212,10 @@ TOOLS = [
      _obj({'column': dict(_STR, description='Column id.'),
            'project': dict(_STR, description='Project name.'),
            'assignee': _STR,
+           'sprint': dict(_SPRINT_ARG, description='Only cards in this sprint: an id, "active" or "backlog". '
+                                                    'Includes done cards of closed sprints.'),
+           'include_closed': {'type': 'boolean', 'description': 'Also include done cards of closed sprints '
+                                                                  '(hidden by default).'},
            'query': dict(_STR, description='Case-insensitive text to find in title or description.'),
            'limit': {'type': 'integer', 'minimum': 0, 'description': 'Return at most this many cards.'},
            'offset': {'type': 'integer', 'minimum': 0, 'description': 'Skip this many matching cards first.'},
@@ -171,16 +227,16 @@ TOOLS = [
            'column': dict(_STR, description="Column id (default 'todo')."),
            'position': {'type': 'integer', 'description': 'Index within the column (0 = top).'},
            'project': _STR, 'assignee': _STR, 'color': dict(_STR, description='Hex color; ignored if project set.'),
-           'links': _LINKS}, ['title']),
+           'sprint': _SPRINT_ARG, 'links': _LINKS}, ['title']),
      _tool_create_card),
     ('update_card', "Update a card's fields, move it to another column, and/or reorder it. "
                     "Order is one global value per card. Moving with only 'column' keeps the card's order "
                     "value, so it lands where that value falls in the destination column. 'position' (0 = top) "
                     "places it at that index among the column's other cards, changing only this card's order "
                     "value; it works within the current column too. Pass an empty string for project/assignee to clear them.",
-     _obj({'id': _STR, 'title': _STR, 'description': _STR, 'column': dict(_STR, description='Destination column id.'),
+     _obj({'id': _STR, 'title': _STR, 'description': _STR, 'column': dict(_STR, description='Destination column id, or "done" for the current done column.'),
            'position': {'type': 'integer', 'description': 'Index among the destination column\'s other cards (0 = top).'},
-           'project': _STR, 'assignee': _STR, 'color': _STR, 'links': _LINKS}, ['id']),
+           'project': _STR, 'assignee': _STR, 'color': _STR, 'sprint': _SPRINT_ARG, 'links': _LINKS}, ['id']),
      _tool_update_card),
     ('get_card_history', "A card's column-change history, oldest first (from/to column ids, UTC timestamp, "
                          "source), plus created_at, started_at, completed_at and column_since. started_at is the first move to another "
@@ -195,24 +251,61 @@ TOOLS = [
                        'recorded (cards from before history). Cards carry created_at, started_at, completed_at '
                        'and column_since in list_cards and get_board too.',
      _obj({'project': _STR,
+           'sprint': dict(_SPRINT_ARG, description='Only cards in this sprint (id, "active" or "backlog"). '
+                                                    'by_sprint always summarises sprints: committed/completed/carried '
+                                                    'and the lead/work time summaries of completed cards.'),
            'created_since': dict(_STR, description='Only cards created on/after this date (yyyy-mm-dd).'),
            'completed_since': dict(_STR, description='Only cards completed on/after this date (yyyy-mm-dd).'),
            'cards': {'type': 'boolean', 'description': 'false returns summaries only (default true).'}}),
      _tool_get_card_stats),
     ('delete_card', 'Delete a card by id.', _obj({'id': _STR}, ['id']), _tool_delete_card),
-    ('list_columns', 'List columns (id, title, color, hidden, is_done) without cards. Hidden columns are left out '
-                     'unless include_hidden is true.', _obj(_HIDDEN), _tool_list_columns),
-    ('create_column', 'Create a column. Set is_done for a column that holds finished cards.',
-     _obj({'title': _STR, 'color': _STR, 'hidden': {'type': 'boolean'}, 'is_done': _DONE,
+    ('list_columns', 'List columns (id, title, color, hidden, is_done, is_current_done) without cards. Hidden '
+                     'columns are left out unless include_hidden is true. The result also has "current_done" '
+                     '({id, title} of the current done column, hidden or not, or null).', _obj(_HIDDEN), _tool_list_columns),
+    ('create_column', 'Create a column. Set is_done for a column that holds finished cards; is_current_done makes it '
+                      'the one current done column (clearing the marker elsewhere).',
+     _obj({'title': _STR, 'color': _STR, 'hidden': {'type': 'boolean'}, 'is_done': _DONE, 'is_current_done': _DONE,
            'position': {'type': 'integer'}}, ['title']),
      _tool_create_column),
-    ('update_column', 'Rename, recolor, hide/show, mark as a done column, or reposition a column.',
-     _obj({'id': _STR, 'title': _STR, 'color': _STR, 'hidden': {'type': 'boolean'}, 'is_done': _DONE,
+    ('update_column', 'Rename, recolor, hide/show, mark as a done column, mark as the current done column '
+                      '(is_current_done; only one column holds it, so use this at weekly rollover), or reposition a column.',
+     _obj({'id': _STR, 'title': _STR, 'color': _STR, 'hidden': {'type': 'boolean'}, 'is_done': _DONE, 'is_current_done': _DONE,
            'position': {'type': 'integer'}}, ['id']),
      _tool_update_column),
     ('delete_column', 'Delete a column. Optionally move its cards to another column first; otherwise they are deleted.',
      _obj({'id': _STR, 'move_to': dict(_STR, description='Column id to receive the cards.')}, ['id']),
      _tool_delete_column),
+    ('list_sprints', 'List sprints: the active one first, then planned ones by end date. Closed sprints (newest '
+                     'first) only with include_closed. Each has id, name, goal, state (planned|active|closed), '
+                     'start_date, end_date, card counts (cards, done), overdue_days for an active sprint past its '
+                     'end, and committed/completed/carried for closed ones. Also returns today\'s date.',
+     _obj({'include_closed': {'type': 'boolean'}}), _tool_list_sprints),
+    ('create_sprint', 'Create a planned sprint ending at the END of end_date. name defaults to "Sprint mm/dd". '
+                      'start:true starts it right away (fails if another sprint is active). A sprint is a time box '
+                      'that cards belong to (card.sprint); columns stay the workflow status. No sprint = backlog.',
+     _obj({'end_date': _DATE, 'name': _STR, 'goal': _STR, 'start_date': _DATE, 'start': {'type': 'boolean'}},
+          ['end_date']),
+     _tool_create_sprint),
+    ('update_sprint', 'Rename a planned or active sprint, set its goal, or change its dates.',
+     _obj({'id': _STR, 'name': _STR, 'goal': _STR, 'start_date': _DATE, 'end_date': _DATE}, ['id']),
+     _tool_update_sprint),
+    ('delete_sprint', 'Delete a sprint; its cards go back to the backlog.', _obj({'id': _STR}, ['id']),
+     _tool_delete_sprint),
+    ('start_sprint', 'Start a planned sprint (start_date defaults to today). Only one sprint can be active.',
+     _obj({'id': _STR, 'start_date': _DATE}, ['id']), _tool_start_sprint),
+    ('complete_sprint', 'Close the active sprint. unfinished (cards not in a done column): carry_over (default) '
+                        'moves them to the next sprint keeping their column; backlog takes them out of any sprint; '
+                        'leave keeps them in the closed sprint. For carry_over the next sprint is next_sprint (a '
+                        'planned sprint id) or a new one made from next_end_date (default: this sprint\'s end + 7 '
+                        'days) and next_name; start_next starts it. Done cards stay in the closed sprint and '
+                        'disappear from the board. Returns committed/completed/unfinished counts.',
+     _obj({'id': _STR, 'unfinished': {'type': 'string', 'enum': ['carry_over', 'backlog', 'leave']},
+           'next_sprint': dict(_STR, description='Id of a planned sprint to receive the unfinished cards.'),
+           'next_end_date': _DATE, 'next_name': _STR, 'start_next': {'type': 'boolean'}}, ['id']),
+     _tool_complete_sprint),
+    ('get_card_sprint_history', "A card's sprint changes, oldest first (from/to sprint ids, UTC time, source), "
+                                "plus its current sprint.", _obj({'id': _STR}, ['id']),
+     _tool_get_card_sprint_history),
     ('list_projects', 'List projects (name, color) in order.', _obj({}), _tool_list_projects),
     ('create_project', 'Create a project. A color is generated if omitted.',
      _obj({'name': _STR, 'color': _STR, 'position': {'type': 'integer'}}, ['name']),

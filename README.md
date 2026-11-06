@@ -61,11 +61,23 @@ Cards also carry `created_at` (set once, when the card is created; never changed
 
 `GET /api/stats` (MCP: `get_card_stats`) reports durations in days per card, with n / avg / median / min / max summaries overall and per project: `backlog_days` (created to started), `work_days` (started to completed), `lead_days` (created to completed), plus `in_column_days` and `open_by_column` for cards not yet done (for example how long cards have sat in Burn-In). Filters: `project`, `created_since`, `completed_since`; `cards=false` returns summaries only. Cards with no recorded dates are left out.
 
+## Sprints
+
+A sprint is a time box that cards belong to; columns stay the workflow status, so there is a single Done column. `cards.sprint_id` is null for the backlog. A sprint is `planned`, `active` (only one at a time) or `closed`, and ends at the end of its `end_date`. An active sprint past its end stays active and shows "ended N days ago"; nothing closes it automatically. `PERKAN_TZ` (default UTC) sets which day counts as today.
+
+- `/sprints` is the planning page: the active sprint on top, planned sprints below, then the backlog; closed sprints on request. Drag cards between sections and reorder them. New sprints take an end date from a date picker.
+- Completing a sprint (UI dialog, `POST /api/sprint/<id>/complete`, `complete_sprint`) handles unfinished cards (not in a done column): `carry_over` to the next sprint keeping their column (an existing planned sprint, or a new one), `backlog`, or `leave`. With nothing unfinished the dialog only asks for confirmation. Committed / completed / carried are snapshotted on the sprint.
+- Done cards of a closed sprint are hidden from the board and `list_cards` (they stay in the Done column); `include_closed=true` or a `sprint` filter shows them.
+- Cards take `sprint` (an id, `"active"` or `"backlog"`) on `create_card` / `update_card`; `list_cards` and `get_card_stats` filter by `sprint`, and stats include `by_sprint`. Sprint moves are recorded in `card_sprint_history`.
+- Sprints are part of board export and replace-mode import.
+- `column: "done"` (or `"current_done"`) on `create_card` / `update_card` means the column marked `is_current_done` (set it with `update_column`; only one column holds it).
+- `scripts/migrate_to_sprints.py` converts weekly "Done m/d" columns into closed sprints and opens a first active sprint (dry run unless `--apply`; back up the database first).
+
 ## MCP server
 
 PerKan exposes an [MCP](https://modelcontextprotocol.io) server at `POST /mcp` (Streamable HTTP, stateless, JSON responses). It shares the web app's process and data, and like the rest of the app it has no authentication.
 
-Tools: `get_board`, `list_cards` (with `limit`/`offset`), `create_card`, `update_card` (also moves cards), `get_card_history`, `delete_card`, `list_columns`, `create_column`, `update_column`, `delete_column`, `list_projects`, `create_project`, `update_project`, `delete_project`. Each calls the matching `/api/*` route, so behavior is identical to the UI.
+Tools: `get_board`, `list_cards` (with `limit`/`offset`), `create_card`, `update_card` (also moves cards), `get_card_history`, `get_card_stats`, `get_card_sprint_history`, `delete_card`, `list_columns`, `create_column`, `update_column`, `delete_column`, `list_sprints`, `create_sprint`, `update_sprint`, `delete_sprint`, `start_sprint`, `complete_sprint`, `list_projects`, `create_project`, `update_project`, `delete_project`. Each calls the matching `/api/*` route, so behavior is identical to the UI.
 
 Connect from Claude Code:
 

@@ -20,7 +20,7 @@ DEFAULT_BOARD = {
     {"id": "todo", "title": "To Do", "cards": [], "color": "#1f77b4", "hidden": False},
     {"id": "inprogress", "title": "In Progress", "cards": [], "color": "#ff8c00", "hidden": False},
     {"id": "blocked", "title": "Blocked", "cards": [], "color": "#d62728", "hidden": False},
-    {"id": "done", "title": "Done", "cards": [], "color": "#2ca02c", "hidden": False, "is_done": True}
+    {"id": "done", "title": "Done", "cards": [], "color": "#2ca02c", "hidden": False, "is_done": True, "is_current_done": True}
     ],
     "projects": []
 }
@@ -45,6 +45,9 @@ def _sanitize_card(card):
     created_at = card.get('created_at')
     if isinstance(created_at, str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', created_at):
         sanitized['created_at'] = created_at
+    sprint = card.get('sprint')
+    if isinstance(sprint, str) and sprint:
+        sanitized['sprint'] = sprint
     order = card.get('order')
     if order is not None:
         try:
@@ -85,6 +88,7 @@ def _normalize_board(data):
     normalized_columns = []
     seen_ids = set()      # card ids must be unique across the whole board (they are a primary key)
     seen_columns = set()
+    seen_current = False  # only one column may be the current done column
     for col in data['columns']:
         if not isinstance(col, dict):
             continue
@@ -106,7 +110,10 @@ def _normalize_board(data):
                 sanitized['id'] = str(uuid.uuid4())
             seen_ids.add(sanitized['id'])
             normalized_cards.append(sanitized)
-        normalized_columns.append({'id': col_id, 'title': title, 'color': color, 'hidden': hidden, 'is_done': is_done,
+        is_current = _truthy(col.get('is_current_done', False)) and not seen_current
+        seen_current = seen_current or is_current
+        normalized_columns.append({'id': col_id, 'title': title, 'color': color, 'hidden': hidden,
+                                   'is_done': is_done or is_current, 'is_current_done': is_current,
                                    'cards': normalized_cards})
 
     _ensure_global_orders(normalized_columns)
@@ -124,12 +131,54 @@ def _normalize_board(data):
 
     data['columns'] = normalized_columns
     data['projects'] = normalized_projects
+    if 'sprints' in data:
+        data['sprints'] = _clean_sprints(data['sprints'])
     return data
+
+
+def _clean_sprints(raw):
+    """Valid sprint rows from an import payload (unknown fields dropped, at most one active)."""
+    out, seen, active = [], set(), False
+    for sp in raw if isinstance(raw, list) else []:
+        if not isinstance(sp, dict) or not isinstance(sp.get('id'), str) or sp['id'] in seen:
+            continue
+        end = sp.get('end_date')
+        if not isinstance(end, str) or not db.DATE_RE.fullmatch(end):
+            continue
+        state = sp.get('state') if sp.get('state') in ('planned', 'active', 'closed') else 'planned'
+        if state == 'active':
+            state, active = ('planned' if active else 'active'), True
+        seen.add(sp['id'])
+        row = {k: sp.get(k) for k in ('start_date', 'started_at', 'closed_at', 'committed', 'completed', 'carried')}
+        row.update(id=sp['id'], name=str(sp.get('name') or '').strip() or 'Sprint ' + end[5:].replace('-', '/'),
+                   goal=str(sp.get('goal') or ''), end_date=end, state=state)
+        out.append(row)
+    return out
 
 
 def _source():
     """Who made this change: the X-Perkan-Source header (ui, mcp, ...) or 'api'."""
     return (request.headers.get('X-Perkan-Source') or 'api').strip()[:20] or 'api'
+
+
+@app.errorhandler(db.SprintError)
+def _sprint_error(err):
+    return jsonify({'error': str(err)}), err.status
+
+
+def _sprint_target(conn, ref):
+    """Sprint id for a card's `sprint` argument: an id, "active", or ""/"backlog" (= None, the backlog)."""
+    if ref in (None, '', 'backlog', 'none'):
+        return None
+    if ref == 'active':
+        sid = db.active_sprint(conn)
+        if sid is None:
+            raise db.SprintError('there is no active sprint')
+        return sid
+    sid = db.resolve_sprint(conn, ref)
+    if sid is None:
+        raise db.SprintError('sprint not found', 404)
+    return sid
 
 
 def _finite_or_none(value):
@@ -260,17 +309,24 @@ def list_view():
     return render_template('list.html')
 
 
+@app.route('/sprints')
+def sprints_view():
+    return render_template('sprints.html')
+
+
 @app.route('/api/board', methods=['GET'])
 def get_board():
     # Hidden columns (and their cards) are left out unless ?include_hidden=true
     with db.read() as conn:
-        return jsonify(db.load_board(conn, include_hidden=_truthy(request.args.get('include_hidden'))))
+        return jsonify(db.load_board(conn, include_hidden=_truthy(request.args.get('include_hidden')),
+                                     include_closed=_truthy(request.args.get('include_closed'))))
 
 
 @app.route('/api/board/export', methods=['GET'])
 def export_board():
     with db.read() as conn:
-        board = db.load_board(conn, include_hidden=True)   # a backup must contain everything
+        board = db.load_board(conn, include_hidden=True, include_closed=True)   # a backup must contain everything
+        board['sprints'] = db.list_sprints(conn, include_closed=True)
     return Response(json.dumps(board, indent=2), mimetype='application/json',
                     headers={'Content-Disposition': 'attachment; filename=kanban.json'})
 
@@ -316,7 +372,8 @@ def get_cards():
         cards, total = db.list_cards(
             conn, column=args.get('column') or None, project=args.get('project') or None,
             assignee=args.get('assignee') or None, query=args.get('query') or None,
-            limit=limit, offset=offset or 0, include_hidden=_truthy(args.get('include_hidden')))
+            limit=limit, offset=offset or 0, include_hidden=_truthy(args.get('include_hidden')),
+            sprint=args.get('sprint') or None, include_closed=_truthy(args.get('include_closed')))
     return jsonify({'cards': cards, 'total': total})
 
 
@@ -335,8 +392,10 @@ def create_card():
         return jsonify({'error': 'title required'}), 400
 
     with db.write() as conn:
-        if conn.execute('SELECT 1 FROM columns WHERE id = ?', (column_id,)).fetchone() is None:
+        column_id = db.resolve_column(conn, column_id)
+        if column_id is None:
             return jsonify({'error': 'column not found'}), 404
+        sprint_id = _sprint_target(conn, data.get('sprint'))
         card = {
             'id': str(uuid.uuid4()),
             'title': title,
@@ -367,6 +426,8 @@ def create_card():
         card['created_at'] = db.now_iso()
         db.insert_card(conn, column_id, card)
         db.record_move(conn, card['id'], None, column_id, _source(), at=card['created_at'])
+        if sprint_id:
+            db.set_card_sprint(conn, card['id'], sprint_id, _source())
         card, _col = db.get_card(conn, card['id'])
         return jsonify(card), 201
 
@@ -388,8 +449,12 @@ def update_card(card_id):
         card_obj, original_column_id = db.get_card(conn, card_id)
         if card_obj is None:
             return jsonify({'error': 'card not found'}), 404
-        if target_col and conn.execute('SELECT 1 FROM columns WHERE id = ?', (target_col,)).fetchone() is None:
-            return jsonify({'error': 'target column not found'}), 404
+        sprint_change = 'sprint' in data
+        sprint_id = _sprint_target(conn, data.get('sprint')) if sprint_change else None
+        if target_col:
+            target_col = db.resolve_column(conn, target_col)
+            if target_col is None:
+                return jsonify({'error': 'target column not found'}), 404
 
         # update fields
         if title is not None:
@@ -437,6 +502,8 @@ def update_card(card_id):
         db.update_card_row(conn, card_obj, destination_column_id)
         if destination_column_id != original_column_id:
             db.record_move(conn, card_id, original_column_id, destination_column_id, _source())
+        if sprint_change:
+            db.set_card_sprint(conn, card_id, sprint_id, _source())
         card_obj, _col = db.get_card(conn, card_id)
         return jsonify(card_obj)
 
@@ -444,7 +511,7 @@ def update_card(card_id):
 @app.route('/api/stats', methods=['GET'])
 def stats():
     """Durations in days per card (backlog, work, lead, time in current column) with summaries.
-    Filters: project, created_since, completed_since (yyyy-mm-dd or ISO). cards=false leaves out the per-card rows."""
+    Filters: project, sprint (id, active or backlog), created_since, completed_since (yyyy-mm-dd or ISO). by_sprint has committed/completed per sprint. cards=false leaves out the per-card rows."""
     args = request.args
 
     def bound(name):
@@ -465,7 +532,8 @@ def stats():
         return jsonify({'error': err}), 400
     with db.read() as conn:
         result = db.card_stats(conn, project=args.get('project') or None,
-                               created_since=created_since, completed_since=completed_since)
+                               created_since=created_since, completed_since=completed_since,
+                               sprint=args.get('sprint') or None)
     if args.get('cards') is not None and not _truthy(args.get('cards')):
         result.pop('cards')
     return jsonify(result)
@@ -497,7 +565,8 @@ def delete_card(card_id):
 def get_columns():
     with db.read() as conn:
         cols = db.list_columns(conn, include_hidden=_truthy(request.args.get('include_hidden')))
-    return jsonify({'columns': cols})
+        current = db.current_done_column(conn)
+    return jsonify({'columns': cols, 'current_done': current})
 
 
 @app.route('/api/column', methods=['POST'])
@@ -515,7 +584,8 @@ def create_column():
         return s or str(uuid.uuid4())
 
     hidden = _truthy(data.get('hidden', False))
-    is_done = _truthy(data.get('is_done', False))
+    is_current_done = _truthy(data.get('is_current_done', False))
+    is_done = _truthy(data.get('is_done', False)) or is_current_done
     with db.write() as conn:
         ids = db.column_ids(conn)
         col_id = _slug(title)
@@ -528,8 +598,10 @@ def create_column():
         else:
             ids.append(col_id)
         db.place_columns(conn, ids)
+        if is_current_done:
+            db.set_current_done(conn, col_id)
     return jsonify({'id': col_id, 'title': title, 'cards': [], 'color': color, 'hidden': hidden,
-                    'is_done': is_done}), 201
+                    'is_done': is_done, 'is_current_done': is_current_done}), 201
 
 
 @app.route('/api/column/<col_id>', methods=['PUT'])
@@ -540,6 +612,7 @@ def update_column(col_id):
     color = data.get('color')
     hidden = data.get('hidden')
     is_done = data.get('is_done')
+    is_current_done = data.get('is_current_done')
     with db.write() as conn:
         ids = db.column_ids(conn)
         if col_id not in ids:
@@ -552,6 +625,13 @@ def update_column(col_id):
             conn.execute('UPDATE columns SET hidden = ? WHERE id = ?', (1 if hidden else 0, col_id))
         if is_done is not None:
             conn.execute('UPDATE columns SET is_done = ? WHERE id = ?', (1 if _truthy(is_done) else 0, col_id))
+            if not _truthy(is_done):  # a column that is not a done column cannot be the current one
+                conn.execute('UPDATE columns SET is_current_done = 0 WHERE id = ?', (col_id,))
+        if is_current_done is not None:
+            if _truthy(is_current_done):
+                db.set_current_done(conn, col_id)
+            else:
+                conn.execute('UPDATE columns SET is_current_done = 0 WHERE id = ?', (col_id,))
         if position is not None:
             ids.remove(col_id)
             ids.insert(min(max(0, position), len(ids)), col_id)
@@ -576,6 +656,85 @@ def delete_column(col_id):
         conn.execute('DELETE FROM columns WHERE id = ?', (col_id,))  # cascades to any cards left behind
         db.place_columns(conn, ids)
     return jsonify({'deleted': True})
+
+
+# ---------------------------------------------------------------- sprints
+
+@app.route('/api/sprints', methods=['GET'])
+def get_sprints():
+    """Active sprint first, then planned by end date; closed sprints (newest first) only with include_closed=true."""
+    with db.read() as conn:
+        return jsonify({'sprints': db.list_sprints(conn, include_closed=_truthy(request.args.get('include_closed'))),
+                        'today': db.today()})
+
+
+@app.route('/api/sprint', methods=['POST'])
+def create_sprint():
+    data = request.get_json() or {}
+    if not data.get('end_date'):
+        return jsonify({'error': 'end_date required (yyyy-mm-dd; the sprint ends at the end of that day)'}), 400
+    with db.write() as conn:
+        sid = db.create_sprint(conn, data['end_date'], name=data.get('name'), goal=data.get('goal') or '',
+                               start_date=data.get('start_date') or None)
+        sprint = db.get_sprint(conn, sid)
+        if _truthy(data.get('start')):
+            db.start_sprint(conn, sid)
+            sprint = db.get_sprint(conn, sid)
+    return jsonify(sprint), 201
+
+
+@app.route('/api/sprint/<sprint_id>', methods=['GET'])
+def get_sprint(sprint_id):
+    with db.read() as conn:
+        sprint = db.get_sprint(conn, sprint_id)
+    if sprint is None:
+        return jsonify({'error': 'sprint not found'}), 404
+    return jsonify(sprint)
+
+
+@app.route('/api/sprint/<sprint_id>', methods=['PUT'])
+def update_sprint(sprint_id):
+    data = request.get_json() or {}
+    with db.write() as conn:
+        db.update_sprint(conn, sprint_id, name=data.get('name'), goal=data.get('goal'),
+                         start_date=data.get('start_date'), end_date=data.get('end_date'))
+        return jsonify(db.get_sprint(conn, sprint_id))
+
+
+@app.route('/api/sprint/<sprint_id>', methods=['DELETE'])
+def delete_sprint(sprint_id):
+    with db.write() as conn:
+        db.delete_sprint(conn, sprint_id)
+    return jsonify({'deleted': True})
+
+
+@app.route('/api/sprint/<sprint_id>/start', methods=['POST'])
+def start_sprint(sprint_id):
+    data = request.get_json(silent=True) or {}
+    with db.write() as conn:
+        db.start_sprint(conn, sprint_id, start_date=data.get('start_date') or None)
+        return jsonify(db.get_sprint(conn, sprint_id))
+
+
+@app.route('/api/sprint/<sprint_id>/complete', methods=['POST'])
+def complete_sprint(sprint_id):
+    data = request.get_json(silent=True) or {}
+    with db.write() as conn:
+        result = db.complete_sprint(
+            conn, sprint_id, unfinished=data.get('unfinished') or 'carry_over',
+            next_sprint=data.get('next_sprint') or None, next_end_date=data.get('next_end_date') or None,
+            next_name=data.get('next_name') or None, start_next=_truthy(data.get('start_next', False)),
+            source=_source())
+    return jsonify(result)
+
+
+@app.route('/api/card/<card_id>/sprint-history', methods=['GET'])
+def card_sprint_history(card_id):
+    with db.read() as conn:
+        card, _col = db.get_card(conn, card_id)
+        if card is None:
+            return jsonify({'error': 'card not found'}), 404
+        return jsonify({'id': card_id, 'sprint': card.get('sprint'), 'history': db.card_sprint_history(conn, card_id)})
 
 
 @app.route('/api/projects', methods=['GET'])

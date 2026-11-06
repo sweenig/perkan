@@ -27,7 +27,7 @@ def board_fixture():
         'columns': [
             {'id': 'todo', 'title': 'To Do', 'cards': [card('t1', 1e6), card('t2', 3e6), card('t3', 5e6)]},
             {'id': 'doing', 'title': 'Doing', 'cards': [card('d1', 2e6), card('d2', 4e6)]},
-            {'id': 'done', 'title': 'Done', 'cards': []},
+            {'id': 'done', 'title': 'Done', 'is_current_done': True, 'cards': []},
             {'id': 'archive', 'title': 'Archive', 'hidden': True, 'cards': [card('h1', 6e6), card('h2', 7e6)]},
         ],
         'projects': [],
@@ -38,6 +38,8 @@ class Base(unittest.TestCase):
     def setUp(self):
         with db.write() as conn:
             conn.execute('DELETE FROM card_history')   # replace_board keeps history of surviving card ids
+            conn.execute('DELETE FROM card_sprint_history')
+            conn.execute('DELETE FROM sprints')
             db.replace_board(conn, perkan._normalize_board(board_fixture()))
         self.c = perkan.app.test_client()
 
@@ -274,6 +276,21 @@ class McpTests(Base):
         self.assertEqual(self.ids('todo')[0], 't3')
         self.assert_invariants()
 
+    def test_sprint_tools(self):
+        sp = self.call('create_sprint', end_date='2026-12-01', start='true')
+        self.assertEqual(sp['state'], 'active')
+        card = self.call('create_card', title='s', sprint='active')
+        self.assertEqual(card['sprint'], sp['id'])
+        self.assertEqual([c['id'] for c in self.call('list_cards', sprint='active')['cards']], [card['id']])
+        self.call('update_card', id=card['id'], column='done')
+        out = self.call('complete_sprint', id=sp['id'], start_next='true')
+        self.assertEqual((out['committed'], out['completed'], out['unfinished']), (1, 1, 0))
+        self.assertEqual(out['next_sprint']['state'], 'active')
+        self.assertEqual(len(self.call('list_sprints')['sprints']), 1)
+        self.assertEqual(self.call('get_card_sprint_history', id=card['id'])['sprint'], sp['id'])
+        self.call('update_sprint', id=out['next_sprint']['id'], goal='Ship it')
+        self.call('delete_sprint', id=out['next_sprint']['id'])
+
 
 class HistoryTests(Base):
     def test_create_records_history_but_no_dates(self):
@@ -337,6 +354,27 @@ class HistoryTests(Base):
         self.assertTrue(r.get_json()['is_done'])
         r = self.c.post('/api/column', json={'title': 'Shipped', 'is_done': True})
         self.assertTrue(r.get_json()['is_done'])
+
+    def test_current_done_column(self):
+        j = self.get('/api/columns?include_hidden=true')
+        self.assertEqual(j['current_done']['id'], 'done')
+        # marking another column moves the marker and implies is_done
+        r = self.c.put('/api/column/doing', json={'is_current_done': True})
+        self.assertTrue(r.get_json()['is_current_done'])
+        self.assertTrue(r.get_json()['is_done'])
+        cols = {c['id']: c for c in self.get('/api/columns?include_hidden=true')['columns']}
+        self.assertFalse(cols['done']['is_current_done'])
+        self.assertEqual(sum(c['is_current_done'] for c in cols.values()), 1)
+        # "done" / "current_done" are aliases for it
+        cid = self.c.post('/api/card', json={'title': 'A', 'column': 'current_done'}).get_json()['id']
+        self.assertEqual(self.get('/api/card/' + cid + '/history')['history'][0]['to'], 'doing')
+        # the alias wins even over a column whose id is literally "done" (here: no longer the current one)
+        cid2 = self.c.post('/api/card', json={'title': 'B', 'column': 'done'}).get_json()['id']
+        self.assertEqual(self.get('/api/card/' + cid2 + '/history')['history'][0]['to'], 'doing')
+        # un-marking a done column clears the marker; alias then fails
+        self.c.put('/api/column/doing', json={'is_done': False})
+        self.assertIsNone(self.get('/api/columns')['current_done'])
+        self.assertEqual(self.c.put('/api/card/' + cid, json={'column': 'current_done'}).status_code, 404)
 
     def test_backfill_from_description(self):
         b = board_fixture()
@@ -478,6 +516,179 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual([c[1] for c in cards], [1e6, 2e6, 3e6, 4e6, 5e6])
         self.assertEqual(json.loads(out[1]), [{'text': 'x', 'url': 'http://x'}])   # links survive the schema change
         self.assertEqual(out[2], str(db.SCHEMA_VERSION))
+
+class SprintTests(Base):
+    def mk(self, end='2026-12-01', **kw):
+        r = self.c.post('/api/sprint', json=dict(end_date=end, **kw))
+        self.assertEqual(r.status_code, 201, r.get_json())
+        return r.get_json()
+
+    def card_sprint(self, cid):
+        return self.get('/api/cards?include_hidden=true&include_closed=true&query=' + cid)['cards']
+
+    def sprint_of(self, cid):
+        return self.c.get('/api/card/' + cid + '/sprint-history').get_json()['sprint']
+
+    def test_create_validates_and_names(self):
+        self.assertEqual(self.c.post('/api/sprint', json={}).status_code, 400)
+        self.assertEqual(self.c.post('/api/sprint', json={'end_date': '12/01'}).status_code, 400)
+        self.assertEqual(self.c.post('/api/sprint', json={'end_date': '2026-02-30'}).status_code, 400)
+        self.assertEqual(self.c.post('/api/sprint', json={'end_date': '2026-12-01', 'start_date': '2026-12-05'}).status_code, 400)
+        sp = self.mk()
+        self.assertEqual(sp['state'], 'planned')
+        self.assertEqual(sp['name'], 'Sprint 12/01')
+        self.assertEqual(self.mk(name='Mine')['name'], 'Mine')
+
+    def test_only_one_active_sprint(self):
+        a, b = self.mk('2026-12-01'), self.mk('2026-12-08')
+        self.assertEqual(self.c.post('/api/sprint/%s/start' % a['id']).get_json()['state'], 'active')
+        r = self.c.post('/api/sprint/%s/start' % b['id'])
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(self.c.post('/api/sprint/%s/start' % a['id']).status_code, 400)   # already active
+        self.assertEqual([s['id'] for s in self.get('/api/sprints')['sprints']], [a['id'], b['id']])
+
+    def test_card_sprint_argument(self):
+        a = self.mk()
+        self.assertEqual(self.c.post('/api/card', json={'title': 'x', 'sprint': 'active'}).status_code, 400)  # none active
+        self.c.post('/api/sprint/%s/start' % a['id'])
+        cid = self.c.post('/api/card', json={'title': 'x', 'sprint': 'active'}).get_json()['id']
+        self.assertEqual(self.sprint_of(cid), a['id'])
+        self.assertEqual(self.c.put('/api/card/t1', json={'sprint': a['id']}).get_json()['sprint'], a['id'])
+        self.assertNotIn('sprint', self.c.put('/api/card/t1', json={'sprint': 'backlog'}).get_json())
+        self.assertEqual(self.c.put('/api/card/t1', json={'sprint': 'nope'}).status_code, 404)
+        hist = self.c.get('/api/card/t1/sprint-history').get_json()['history']
+        self.assertEqual([(h['from'], h['to']) for h in hist], [(None, a['id']), (a['id'], None)])
+
+    def test_complete_carry_over(self):
+        a = self.mk('2026-12-01')
+        self.c.post('/api/sprint/%s/start' % a['id'])
+        for cid in ('t1', 'd1', 'd2'):
+            self.c.put('/api/card/' + cid, json={'sprint': a['id']})
+        self.c.put('/api/card/d2', json={'column': 'done'})
+        r = self.c.post('/api/sprint/%s/complete' % a['id'], json={'next_end_date': '2026-12-08'})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        j = r.get_json()
+        self.assertEqual((j['committed'], j['completed'], j['unfinished']), (3, 1, 2))
+        self.assertEqual(j['sprint']['state'], 'closed')
+        self.assertEqual(j['sprint']['carried'], 2)
+        nxt = j['next_sprint']
+        self.assertEqual(nxt['state'], 'planned')
+        self.assertEqual(nxt['end_date'], '2026-12-08')
+        cards = {c['id']: c for c in self.get('/api/cards?sprint=%s' % nxt['id'])['cards']}
+        self.assertEqual(set(cards), {'t1', 'd1'})
+        self.assertEqual(cards['d1']['column'], 'doing')               # status is kept
+        self.assertEqual(self.sprint_of('d2'), a['id'])                # done card stays in the closed sprint
+        # closed sprint's done cards are hidden from the board and card lists ...
+        board = self.get('/api/board')
+        self.assertNotIn('d2', [c['id'] for col in board['columns'] for c in col['cards']])
+        self.assertNotIn('d2', [c['id'] for c in self.get('/api/cards')['cards']])
+        # ... unless asked for
+        self.assertIn('d2', [c['id'] for c in self.get('/api/cards?include_closed=true')['cards']])
+        self.assertIn('d2', [c['id'] for c in self.get('/api/cards?sprint=%s' % a['id'])['cards']])
+        self.assertEqual([s['id'] for s in self.get('/api/sprints')['sprints']], [nxt['id']])
+        self.assertEqual(len(self.get('/api/sprints?include_closed=true')['sprints']), 2)
+        # cards cannot be moved into the closed sprint
+        self.assertEqual(self.c.put('/api/card/t2', json={'sprint': a['id']}).status_code, 400)
+
+    def test_stats_by_sprint(self):
+        a = self.mk('2026-12-01')
+        self.c.post('/api/sprint/%s/start' % a['id'])
+        for cid in ('t1', 'd1'):
+            self.c.put('/api/card/' + cid, json={'sprint': a['id']})
+        self.c.put('/api/card/d1', json={'column': 'done'})
+        st = self.get('/api/stats')
+        self.assertEqual((st['by_sprint'][a['id']]['committed'], st['by_sprint'][a['id']]['completed']), (2, 1))
+        self.c.post('/api/sprint/%s/complete' % a['id'], json={'unfinished': 'backlog'})
+        st = self.get('/api/stats?sprint=%s' % a['id'])
+        self.assertEqual(st['by_sprint'][a['id']]['committed'], 2)
+        self.assertEqual(st['by_sprint'][a['id']]['carried'], 0)
+        self.assertEqual([c['id'] for c in st['cards']], ['d1'])        # t1 went back to the backlog
+
+    def test_complete_default_next_week_and_start_next(self):
+        a = self.mk('2026-12-01')
+        self.c.post('/api/sprint/%s/start' % a['id'])
+        self.c.put('/api/card/t1', json={'sprint': a['id']})
+        j = self.c.post('/api/sprint/%s/complete' % a['id'], json={'start_next': True}).get_json()
+        self.assertEqual(j['next_sprint']['end_date'], '2026-12-08')
+        self.assertEqual(j['next_sprint']['state'], 'active')
+
+    def test_complete_into_existing_planned_sprint(self):
+        a, b = self.mk('2026-12-01'), self.mk('2026-12-08')
+        self.c.post('/api/sprint/%s/start' % a['id'])
+        self.c.put('/api/card/t1', json={'sprint': a['id']})
+        j = self.c.post('/api/sprint/%s/complete' % a['id'], json={'next_sprint': b['id']}).get_json()
+        self.assertEqual(j['next_sprint']['id'], b['id'])
+        self.assertEqual(self.sprint_of('t1'), b['id'])
+        self.assertEqual(len(self.get('/api/sprints?include_closed=true')['sprints']), 2)   # none created
+
+    def test_complete_backlog_and_leave(self):
+        for mode, expect in (('backlog', None), ('leave', 'A')):
+            a = self.mk('2026-12-01')
+            self.c.post('/api/sprint/%s/start' % a['id'])
+            self.c.put('/api/card/t1', json={'sprint': a['id']})
+            j = self.c.post('/api/sprint/%s/complete' % a['id'], json={'unfinished': mode}).get_json()
+            self.assertIsNone(j['next_sprint'])
+            self.assertEqual(self.sprint_of('t1'), None if expect is None else a['id'])
+            self.c.put('/api/card/t1', json={'sprint': 'backlog'})
+        bad = self.mk()
+        self.c.post('/api/sprint/%s/start' % bad['id'])
+        r = self.c.post('/api/sprint/%s/complete' % bad['id'], json={'unfinished': 'backlog', 'start_next': True})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(self.c.post('/api/sprint/%s/complete' % bad['id'], json={'unfinished': 'x'}).status_code, 400)
+
+    def test_complete_requires_active_and_overdue_marker(self):
+        a = self.mk('2000-01-01')
+        self.assertEqual(self.c.post('/api/sprint/%s/complete' % a['id']).status_code, 400)   # still planned
+        self.c.post('/api/sprint/%s/start' % a['id'], json={'start_date': '2000-01-01'})
+        sp = self.get('/api/sprints')['sprints'][0]
+        self.assertGreater(sp['overdue_days'], 0)
+        self.assertEqual(sp['state'], 'active')                                              # no auto-close
+
+    def test_update_and_delete(self):
+        a = self.mk('2026-12-01')
+        self.c.put('/api/card/t1', json={'sprint': a['id']})
+        r = self.c.put('/api/sprint/%s' % a['id'], json={'name': 'Renamed', 'end_date': '2026-12-03'})
+        self.assertEqual((r.get_json()['name'], r.get_json()['end_date']), ('Renamed', '2026-12-03'))
+        self.assertEqual(self.c.put('/api/sprint/%s' % a['id'], json={'start_date': '2027-01-01'}).status_code, 400)
+        self.assertEqual(self.c.delete('/api/sprint/%s' % a['id']).status_code, 200)
+        self.assertIsNone(self.sprint_of('t1'))
+        self.assertEqual(self.c.delete('/api/sprint/%s' % a['id']).status_code, 404)
+
+    def test_export_import_keeps_sprints(self):
+        a = self.mk('2026-12-01')
+        self.c.put('/api/card/t1', json={'sprint': a['id']})
+        exported = self.c.get('/api/board/export').get_json()
+        import io
+        r = self.c.post('/api/board/import', data={'mode': 'replace',
+                        'file': (io.BytesIO(json.dumps(exported).encode()), 'kanban.json')},
+                        content_type='multipart/form-data')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.sprint_of('t1'), a['id'])
+        self.assertEqual([s['id'] for s in self.get('/api/sprints')['sprints']], [a['id']])
+
+
+class SprintMigrationTests(Base):
+    def test_weekly_done_columns_become_closed_sprints(self):
+        b = board_fixture()
+        b['columns'].insert(3, {'id': 'w1', 'title': 'Done 10/30', 'hidden': True, 'is_done': True,
+                                'cards': [{'id': 'w1a', 'title': 'W', 'description': 'DONE 2026-10-29', 'order': 8e6}]})
+        with db.write() as conn:
+            db.replace_board(conn, perkan._normalize_board(b))
+        with db.write() as conn:
+            before = db.card_dates(conn, ['w1a'])['w1a']
+            report = db.migrate_to_sprints(conn, today_str='2026-11-06')
+            after = db.card_dates(conn, ['w1a'])['w1a']
+        self.assertEqual(before[1], after[1])                          # completed_at untouched
+        self.assertEqual(after[0], None)                               # and the move does not count as started
+        self.assertEqual([x['from_column'] for x in report['closed_sprints']], ['Done 10/30'])
+        self.assertIsNone(report['active_sprint'])                     # "Doing" is not an In Progress / Burn-In column
+        card = self.get('/api/cards?include_closed=true&query=W')['cards'][0]
+        self.assertEqual(card['column'], 'done')
+        self.assertEqual(self.get('/api/sprints?include_closed=true')['sprints'][-1]['end_date'], '2026-10-30')
+        self.assertNotIn('w1a', [c['id'] for col in self.get('/api/board')['columns'] for c in col['cards']])
+        with db.write() as conn:
+            with self.assertRaises(db.SprintError):
+                db.migrate_to_sprints(conn)                            # refuses to run twice
 
 
 if __name__ == '__main__':

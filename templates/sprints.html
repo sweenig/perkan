@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Sprints - Personal Kanban</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/sprints.css">
+    <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+  </head>
+  <body class="sprints-page">
+    <header>
+      <div class="header-top">
+        <div class="view-switcher">
+          <a href="/" class="view-link">🎯 Board</a>
+          <a href="/list" class="view-link">📋 List</a>
+          <span class="view-link active">🏃 Sprints</span>
+        </div>
+        <div id="projectFilters" class="project-filters" aria-live="polite"></div>
+        <label class="sp-toggle"><input type="checkbox" id="showClosed"> Show closed sprints</label>
+        <button id="newSprintBtn" class="sp-btn sp-primary">＋ New sprint</button>
+      </div>
+    </header>
+    <main id="sprintsMain" class="sp-main" aria-live="polite"></main>
+
+    <dialog id="sprintDialog" class="sp-dialog">
+      <form method="dialog" id="sprintForm">
+        <h2 id="sprintDialogTitle">New sprint</h2>
+        <label>Ends on (the sprint ends at the end of this day)
+          <input type="date" id="spEnd" required>
+        </label>
+        <label>Name <small>(optional; defaults to "Sprint mm/dd")</small>
+          <input type="text" id="spName" maxlength="80">
+        </label>
+        <label>Goal <small>(optional)</small>
+          <input type="text" id="spGoal" maxlength="200">
+        </label>
+        <p id="spError" class="sp-error" hidden></p>
+        <div class="sp-actions">
+          <button type="button" class="sp-btn" data-close>Cancel</button>
+          <button type="submit" class="sp-btn sp-primary" id="spSave">Create</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="completeDialog" class="sp-dialog">
+      <form method="dialog" id="completeForm">
+        <h2 id="completeTitle">Complete sprint</h2>
+        <p id="completeSummary"></p>
+        <p id="completeConfirm" hidden>Every card is done. Complete this sprint?</p>
+        <fieldset id="unfinishedFields">
+          <legend>Unfinished cards</legend>
+          <label class="sp-radio"><input type="radio" name="unfinished" value="carry_over" checked> Carry over to the next sprint (keep their column)</label>
+          <div id="carryOptions" class="sp-indent">
+            <label class="sp-radio"><input type="radio" name="carryTo" value="new" checked> New sprint ending
+              <input type="date" id="cpEnd"></label>
+            <label class="sp-radio"><input type="radio" name="carryTo" value="existing"> Existing planned sprint
+              <select id="cpExisting"></select></label>
+            <label class="sp-radio"><input type="checkbox" id="cpStart"> Start it right away</label>
+          </div>
+          <label class="sp-radio"><input type="radio" name="unfinished" value="backlog"> Return them to the backlog</label>
+          <label class="sp-radio"><input type="radio" name="unfinished" value="leave"> Leave them in this sprint (closed)</label>
+        </fieldset>
+        <p id="cpError" class="sp-error" hidden></p>
+        <div class="sp-actions">
+          <button type="button" class="sp-btn" data-close>Cancel</button>
+          <button type="submit" class="sp-btn sp-primary">Complete sprint</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="/static/sprints.js"></script>
+  </body>
+</html>
