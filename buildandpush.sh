@@ -16,6 +16,21 @@ if [[ -z "$VERSION" ]]; then
   exit 1
 fi
 
+# Multi-arch builds need QEMU emulation for the non-native platform. It is lost
+# when Docker/WSL restarts, so check for it and (re)register it when missing.
+check_emulation() {
+  docker run --rm --platform linux/arm64 busybox true >/dev/null 2>&1
+}
+
+if ! check_emulation; then
+  echo "⚙️  arm64 emulation not available; registering QEMU binfmt handlers (needs a privileged container)..."
+  docker run --privileged --rm tonistiigi/binfmt --install arm64 >/dev/null
+  if ! check_emulation; then
+    echo "❌ arm64 emulation still unavailable after install"
+    exit 1
+  fi
+fi
+
 echo "� Building and pushing:"
 echo "  - ${IMAGE}:latest"
 echo "  - ${IMAGE}:${VERSION}"
