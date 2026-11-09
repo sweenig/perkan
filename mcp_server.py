@@ -252,7 +252,8 @@ TOOLS = [
                        'and column_since in list_cards and get_board too.',
      _obj({'project': _STR,
            'sprint': dict(_SPRINT_ARG, description='Only cards in this sprint (id, "active" or "backlog"). '
-                                                    'by_sprint always summarises sprints: committed/completed/carried '
+                                                    'by_sprint always summarises sprints: committed (the set at the start), '
+                                                    'added (cards added after it started), completed/carried '
                                                     'and the lead/work time summaries of completed cards.'),
            'created_since': dict(_STR, description='Only cards created on/after this date (yyyy-mm-dd).'),
            'completed_since': dict(_STR, description='Only cards completed on/after this date (yyyy-mm-dd).'),
@@ -278,7 +279,7 @@ TOOLS = [
     ('list_sprints', 'List sprints: the active one first, then planned ones by end date. Closed sprints (newest '
                      'first) only with include_closed. Each has id, name, goal, state (planned|active|closed), '
                      'start_date, end_date, card counts (cards, done), overdue_days for an active sprint past its '
-                     'end, and committed/completed/carried for closed ones. Also returns today\'s date.',
+                     'end, added (cards added after it started), and committed/completed/carried for closed ones. Also returns today\'s date.',
      _obj({'include_closed': {'type': 'boolean'}}), _tool_list_sprints),
     ('create_sprint', 'Create a planned sprint ending at the END of end_date. name defaults to "Sprint mm/dd". '
                       'start:true starts it right away (fails if another sprint is active). A sprint is a time box '
@@ -298,7 +299,7 @@ TOOLS = [
                         'leave keeps them in the closed sprint. For carry_over the next sprint is next_sprint (a '
                         'planned sprint id) or a new one made from next_end_date (default: this sprint\'s end + 7 '
                         'days) and next_name; start_next starts it. Done cards stay in the closed sprint and '
-                        'disappear from the board. Returns committed/completed/unfinished counts.',
+                        'disappear from the board. Returns committed (the set at the start) / added (cards added mid-sprint) / completed / unfinished counts.',
      _obj({'id': _STR, 'unfinished': {'type': 'string', 'enum': ['carry_over', 'backlog', 'leave']},
            'next_sprint': dict(_STR, description='Id of a planned sprint to receive the unfinished cards.'),
            'next_end_date': _DATE, 'next_name': _STR, 'start_next': {'type': 'boolean'}}, ['id']),

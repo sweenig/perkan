@@ -319,6 +319,7 @@ function createCardElement(card, projectMap) {
     <div class="card-title">${escapeHtml(card.title)}</div>
     <div class="card-desc">${escapeHtmlWithBr(card.description || '')}</div>
     ${dateLine ? `<div class="card-dates">${dateLine}</div>` : ''}
+    ${card.added_after_start ? `<div class="card-added" title="Added to its sprint after the sprint started${card.added_to_sprint_at ? ' (' + fmtDateTime(card.added_to_sprint_at) + ')' : ''}">＋ added mid-sprint</div>` : ''}
     <div class="card-footer">
       <div class="card-footer-left">
         ${linkCount > 0 ? `<div class="card-links" title="${linkCount} link${linkCount!==1?'s':''}">🔗 ${linkCount}</div>` : ''}

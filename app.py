@@ -149,7 +149,7 @@ def _clean_sprints(raw):
         if state == 'active':
             state, active = ('planned' if active else 'active'), True
         seen.add(sp['id'])
-        row = {k: sp.get(k) for k in ('start_date', 'started_at', 'closed_at', 'committed', 'completed', 'carried')}
+        row = {k: sp.get(k) for k in ('start_date', 'started_at', 'closed_at', 'committed', 'completed', 'carried', 'added')}
         row.update(id=sp['id'], name=str(sp.get('name') or '').strip() or 'Sprint ' + end[5:].replace('-', '/'),
                    goal=str(sp.get('goal') or ''), end_date=end, state=state)
         out.append(row)

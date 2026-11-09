@@ -42,3 +42,6 @@
 .sp-indent{margin-left:26px}
 .sp-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
 .sp-error{color:#ff6b6b;font-size:13px}
+
+.sp-pill.sp-added{background:#5a3d12;color:#ffd699}
+.sp-added-count{color:#ffd699}
