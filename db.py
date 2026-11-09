@@ -206,7 +206,7 @@ def load_board(conn, include_hidden=False, include_closed=False):
 
     projects = [{'name': r['name'], 'color': r['color']}
                 for r in conn.execute('SELECT name, color FROM projects ORDER BY position')]
-    return {'columns': columns, 'projects': projects}
+    return {'columns': columns, 'projects': projects, 'active_sprint': active_sprint(conn)}
 
 
 def list_columns(conn, include_hidden=False):

@@ -222,7 +222,7 @@ TOOLS = [
            **_HIDDEN}),
      _tool_list_cards),
     ('create_card', 'Create a card. Setting a project creates it if missing and applies its color. '
-                    'It goes after all other cards unless position is given.',
+                    'It goes after all other cards unless position is given. A card created in any column but the first joins the active sprint (as added mid-sprint) unless sprint is given.',
      _obj({'title': _STR, 'description': _STR,
            'column': dict(_STR, description="Column id (default 'todo')."),
            'position': {'type': 'integer', 'description': 'Index within the column (0 = top).'},
@@ -233,7 +233,7 @@ TOOLS = [
                     "Order is one global value per card. Moving with only 'column' keeps the card's order "
                     "value, so it lands where that value falls in the destination column. 'position' (0 = top) "
                     "places it at that index among the column's other cards, changing only this card's order "
-                    "value; it works within the current column too. Pass an empty string for project/assignee to clear them.",
+                    "value; it works within the current column too. Pass an empty string for project/assignee to clear them. A card outside the active sprint cannot leave the first column (add it to the sprint first, or in the same call).",
      _obj({'id': _STR, 'title': _STR, 'description': _STR, 'column': dict(_STR, description='Destination column id, or "done" for the current done column.'),
            'position': {'type': 'integer', 'description': 'Index among the destination column\'s other cards (0 = top).'},
            'project': _STR, 'assignee': _STR, 'color': _STR, 'sprint': _SPRINT_ARG, 'links': _LINKS}, ['id']),
