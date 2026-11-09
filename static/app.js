@@ -30,8 +30,13 @@ function fmtDateTime(iso){
 let latestBoard = null;
 let activeProjectFilter = null;
 let cardTruncationEnabled = localStorage.getItem('cardTruncationEnabled') !== 'false';
+let sprintOnlyEnabled = localStorage.getItem('sprintOnlyEnabled') === 'true';
 let draggedCardId = null;
 let draggedCardColumnId = null;
+async function failMessage(res, fallback){
+  try { const body = await res.json(); if(body && body.error) return body.error; } catch(e) {}
+  return fallback;
+}
 async function fetchBoard() {
   const res = await fetch('/api/board?include_hidden=true');
   latestBoard = await res.json();
@@ -121,7 +126,7 @@ function makeDropZone(beforeOrder, afterOrder, colId, isSameCol){
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({column: colId})
       });
-      if(!res.ok){ alert('Unable to move card. Please try again.'); render(); return; }
+      if(!res.ok){ alert(await failMessage(res, 'Unable to move card. Please try again.')); render(); return; }
     }
     draggedCardId = null;
     draggedCardColumnId = null;
@@ -173,7 +178,7 @@ function showDropZones(){
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({column: colId})
         });
-        if(!res.ok){ alert('Unable to move card. Please try again.'); render(); return; }
+        if(!res.ok){ alert(await failMessage(res, 'Unable to move card. Please try again.')); render(); return; }
         draggedCardId = null;
         draggedCardColumnId = null;
         render();
@@ -513,11 +518,18 @@ async function render(options = {}){
       continue;
     }
     const cardsInColumn = Array.isArray(col.cards) ? col.cards : [];
-    const visibleCards = !activeProjectFilter
+    const filtering = !!activeProjectFilter || sprintOnlyEnabled;
+    const visibleCards = !filtering
       ? cardsInColumn
       : cardsInColumn.filter(card => {
-          const projectName = card && card.project ? card.project.trim() : '';
-          return projectName === activeProjectFilter;
+          if(sprintOnlyEnabled && !(board.active_sprint && card && card.sprint === board.active_sprint)){
+            return false;
+          }
+          if(activeProjectFilter){
+            const projectName = card && card.project ? card.project.trim() : '';
+            return projectName === activeProjectFilter;
+          }
+          return true;
         });
     const colEl = document.createElement('div');
     colEl.className = 'column';
@@ -533,7 +545,7 @@ async function render(options = {}){
     header.className = 'col-header';
     const visibleCount = visibleCards.length;
     const totalCount = cardsInColumn.length;
-    const countLabel = activeProjectFilter ? `${visibleCount}/${totalCount || 0}` : `${visibleCount}`;
+    const countLabel = filtering ? `${visibleCount}/${totalCount || 0}` : `${visibleCount}`;
     header.textContent = `${col.title} (${countLabel})`;
     colEl.appendChild(header);
 
@@ -555,7 +567,7 @@ async function render(options = {}){
         body: JSON.stringify({column: col.id})
       });
       if(!res.ok){
-        alert('Unable to move card. Please try again.');
+        alert(await failMessage(res, 'Unable to move card. Please try again.'));
         return;
       }
       draggedCardId = null;
@@ -772,6 +784,21 @@ function focusFirstProjectOption(state){
 
 function refreshProjectInputs(){
   projectPickerRegistry.forEach(state => buildProjectPickerMenu(state));
+}
+
+const sprintOnlyBtn = document.getElementById('sprintOnlyBtn');
+if(sprintOnlyBtn && document.getElementById('board')){
+  const syncSprintOnlyBtn = ()=>{
+    sprintOnlyBtn.setAttribute('aria-pressed', sprintOnlyEnabled ? 'true' : 'false');
+    sprintOnlyBtn.classList.toggle('active', sprintOnlyEnabled);
+  };
+  syncSprintOnlyBtn();
+  sprintOnlyBtn.addEventListener('click', ()=>{
+    sprintOnlyEnabled = !sprintOnlyEnabled;
+    localStorage.setItem('sprintOnlyEnabled', sprintOnlyEnabled);
+    syncSprintOnlyBtn();
+    render({useLatest: true});
+  });
 }
 
 const truncateBtn = document.getElementById('truncateBtn');

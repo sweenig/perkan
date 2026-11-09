@@ -400,7 +400,13 @@ def create_card():
         column_id = db.resolve_column(conn, column_id)
         if column_id is None:
             return jsonify({'error': 'column not found'}), 404
-        sprint_id = _sprint_target(conn, data.get('sprint'))
+        if 'sprint' in data:
+            sprint_id = _sprint_target(conn, data.get('sprint'))
+        elif column_id != db.list_columns(conn, include_hidden=True)[0]['id']:
+            # created past the first column (work already under way or done): it belongs to the active sprint
+            sprint_id = db.active_sprint(conn)
+        else:
+            sprint_id = None
         card = {
             'id': str(uuid.uuid4()),
             'title': title,
@@ -461,6 +467,14 @@ def update_card(card_id):
             if target_col is None:
                 return jsonify({'error': 'target column not found'}), 404
 
+        destination_column_id = target_col or original_column_id
+        if destination_column_id != original_column_id:
+            todo_id = db.list_columns(conn, include_hidden=True)[0]['id']
+            card_sprint = sprint_id if sprint_change else card_obj.get('sprint')
+            if original_column_id == todo_id and (not card_sprint or card_sprint != db.active_sprint(conn)):
+                return jsonify({'error': 'only cards in the active sprint can move out of the first column; '
+                                         'add the card to the active sprint first'}), 409
+
         # update fields
         if title is not None:
             card_obj['title'] = title
@@ -494,7 +508,6 @@ def update_card(card_id):
         elif 'color' not in card_obj:
             card_obj['color'] = DEFAULT_CARD_COLOR
 
-        destination_column_id = target_col or original_column_id
         explicit = _finite_or_none(order)
         if explicit is not None:
             # an explicit order value wins (kept unique); position is ignored

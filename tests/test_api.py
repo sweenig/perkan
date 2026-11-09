@@ -81,7 +81,23 @@ class Base(unittest.TestCase):
         self.assertEqual([c['order'] for c in flat], sorted(c['order'] for c in flat))
 
 
-class OrderingTests(Base):
+class InActiveSprint:
+    """Mixin: every fixture card, and every card the post helper creates, is in a started sprint, so tests
+    that move cards out of the first column are not stopped by the active-sprint rule."""
+    def setUp(self):
+        super().setUp()
+        with db.write() as conn:
+            sid = db.create_sprint(conn, '2999-01-01')
+            db.start_sprint(conn, sid)
+            for r in conn.execute('SELECT id FROM cards').fetchall():
+                db.set_card_sprint(conn, r['id'], sid)
+
+    def post(self, **body):
+        body.setdefault('sprint', 'active')
+        return super().post(**body)
+
+
+class OrderingTests(InActiveSprint, Base):
     def test_create_at_position_zero_gets_lowest_order_in_column(self):
         card = self.post(title='new top', column='todo', position=0)
         self.assertEqual(self.ids('todo')[0], card['id'])
@@ -196,6 +212,13 @@ class HiddenColumnTests(Base):
         self.assertEqual([c['id'] for c in full['columns']], ['todo', 'doing', 'done', 'archive'])
         self.assertEqual(self.get('/api/board?include_hidden=1')['columns'][-1]['id'], 'archive')
 
+    def test_board_reports_the_active_sprint(self):
+        self.assertIsNone(self.get('/api/board')['active_sprint'])
+        r = self.c.post('/api/sprint', json={'end_date': '2999-01-01', 'start': True})
+        self.assertEqual(r.status_code, 201, r.data)
+        sid = r.get_json()['id']
+        self.assertEqual(self.get('/api/board')['active_sprint'], sid)
+
     def test_columns_list_excludes_hidden_by_default(self):
         self.assertEqual([c['id'] for c in self.get('/api/columns')['columns']], ['todo', 'doing', 'done'])
         self.assertEqual(len(self.get('/api/columns?include_hidden=true')['columns']), 4)
@@ -292,7 +315,7 @@ class McpTests(Base):
         self.call('delete_sprint', id=out['next_sprint']['id'])
 
 
-class HistoryTests(Base):
+class HistoryTests(InActiveSprint, Base):
     def test_create_records_history_but_no_dates(self):
         card = self.post(title='x', column='todo')
         self.assertNotIn('started_at', card)
@@ -516,6 +539,65 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual([c[1] for c in cards], [1e6, 2e6, 3e6, 4e6, 5e6])
         self.assertEqual(json.loads(out[1]), [{'text': 'x', 'url': 'http://x'}])   # links survive the schema change
         self.assertEqual(out[2], str(db.SCHEMA_VERSION))
+
+class FirstColumnGateTests(Base):
+    def start_sprint(self):
+        with db.write() as conn:
+            sid = db.create_sprint(conn, '2999-01-01')
+            db.start_sprint(conn, sid)
+        return sid
+
+    def try_put(self, card_id, **body):
+        return self.c.put(f'/api/card/{card_id}', json=body)
+
+    def test_card_outside_the_active_sprint_cannot_leave_the_first_column(self):
+        self.assertEqual(self.try_put('t1', column='doing').status_code, 409)   # no active sprint at all
+        self.start_sprint()
+        r = self.try_put('t1', column='doing')                                  # backlog card
+        self.assertEqual(r.status_code, 409, r.data)
+        self.assertIn('active sprint', r.get_json()['error'])
+        self.assertEqual(self.ids('doing'), ['d1', 'd2'])
+
+    def test_card_in_another_sprint_cannot_leave_the_first_column(self):
+        self.start_sprint()
+        with db.write() as conn:
+            other = db.create_sprint(conn, '2999-02-01')
+        self.put('t1', sprint=other)
+        self.assertEqual(self.try_put('t1', column='doing').status_code, 409)
+
+    def test_card_in_the_active_sprint_can_move(self):
+        self.start_sprint()
+        self.put('t1', sprint='active')
+        self.put('t1', column='doing')
+        self.assertIn('t1', self.ids('doing'))
+
+    def test_joining_the_sprint_and_moving_in_one_call_is_allowed(self):
+        self.start_sprint()
+        self.put('t2', sprint='active', column='doing')
+        self.assertIn('t2', self.ids('doing'))
+
+    def test_card_created_past_the_first_column_joins_the_active_sprint_mid_sprint(self):
+        sid = self.start_sprint()
+        with db.write() as conn:                                  # started long ago, so a new card is "mid-sprint"
+            conn.execute("UPDATE sprints SET started_at = '2000-01-01T00:00:00Z' WHERE id = ?", (sid,))
+        for col in ('doing', 'done'):
+            card = self.post(title='walk-in ' + col, column=col)
+            self.assertEqual(card['sprint'], sid)
+            self.assertTrue(card['added_after_start'])
+        self.assertNotIn('sprint', self.post(title='plain', column='todo'))                     # first column: backlog
+        self.assertNotIn('sprint', self.post(title='explicit', column='doing', sprint='backlog'))  # explicit wins
+        self.assertEqual(self.get('/api/sprints')['sprints'][0]['added'], 2)
+
+    def test_card_created_past_the_first_column_without_an_active_sprint_stays_in_the_backlog(self):
+        self.assertNotIn('sprint', self.post(title='no sprint', column='doing'))
+
+    def test_the_rule_only_applies_to_leaving_the_first_column(self):
+        self.start_sprint()
+        self.put('d1', column='done')                 # backlog card already past the first column
+        self.put('d1', column='todo')                 # moving back is fine
+        self.put('t3', order=1.5)                     # reorder within the column is fine
+        self.put('t3', title='renamed')
+
 
 class SprintTests(Base):
     def mk(self, end='2026-12-01', **kw):

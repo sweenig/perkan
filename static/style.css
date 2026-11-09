@@ -87,8 +87,8 @@ header{display:flex;flex-direction:column;gap:10px;padding:14px 20px;background:
 .project-option.empty{color:rgba(255,255,255,0.6);cursor:default}
 
 /* Settings modal */
-#truncateBtn,#settingsBtn{margin-left:8px;padding:6px 10px;flex-shrink:0}
-#truncateBtn.active{background:#5b2e8a;color:#fff}
+#sprintOnlyBtn,#truncateBtn,#settingsBtn{margin-left:8px;padding:6px 10px;flex-shrink:0}
+#sprintOnlyBtn.active,#truncateBtn.active{background:#5b2e8a;color:#fff}
 .modal{position:fixed;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;z-index:1000}
 .modal.hidden{display:none}
 .modal-backdrop{position:absolute;inset:0;background:rgba(0,0,0,0.6)}
