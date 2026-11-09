@@ -8,15 +8,15 @@
 .list-table {
   width: 100%;
   border-collapse: collapse;
-  background: #fff;
-  border: 1px solid #e0e0e0;
+  background: #131320;
+  border: 1px solid #2a2a3a;
   border-radius: 6px;
   overflow: hidden;
 }
 
 .list-table-header {
-  background: #f5f5f5;
-  border-bottom: 2px solid #e0e0e0;
+  background: #1b1b2a;
+  border-bottom: 2px solid #2a2a3a;
   position: sticky;
   top: 0;
   z-index: 5;
@@ -27,7 +27,7 @@
   text-align: left;
   font-weight: 600;
   font-size: 13px;
-  color: #202124;
+  color: #e6e8ee;
   letter-spacing: 0.02em;
   text-transform: uppercase;
 }
@@ -36,7 +36,7 @@
   padding: 12px 16px;
   vertical-align: middle;
   font-size: 14px;
-  color: #202124;
+  color: #e6e8ee;
   text-align: left;
 }
 
@@ -101,7 +101,7 @@
 }
 
 .list-muted {
-  color: #9aa0a6;
+  color: #8a8e9b;
   font-size: 13px;
 }
 
@@ -114,7 +114,7 @@
 .list-links-btn,
 .list-edit-btn {
   background: transparent;
-  border: 1px solid #d0d0d0;
+  border: 1px solid #3a3a4d;
   padding: 4px 8px;
   border-radius: 4px;
   cursor: pointer;
@@ -124,7 +124,7 @@
 
 .list-links-btn:hover,
 .list-edit-btn:hover {
-  background: rgba(91, 46, 138, 0.08);
+  background: rgba(183, 142, 245, 0.14);
   border-color: #563baf;
 }
 
@@ -152,9 +152,9 @@
 .list-empty-message {
   padding: 40px 20px;
   text-align: center;
-  color: #5f6368;
+  color: #a0a4ad;
   font-size: 14px;
-  background: #f9f9f9;
+  background: #181826;
   border-radius: 6px;
   margin-top: 20px;
 }
@@ -171,7 +171,7 @@
   text-decoration: none;
   font-weight: 600;
   font-size: 14px;
-  color: #5b2e8a;
+  color: #b78ef5;
   background: transparent;
   border: 1px solid transparent;
   cursor: pointer;
@@ -179,8 +179,8 @@
 }
 
 .view-link:hover {
-  background: rgba(91, 46, 138, 0.08);
-  border-color: #5b2e8a;
+  background: rgba(183, 142, 245, 0.14);
+  border-color: #b78ef5;
 }
 
 .view-link.active {
@@ -193,12 +193,12 @@ a.view-link {
   display: inline-flex;
   align-items: center;
   border: 1px solid #ddd;
-  color: #5b2e8a;
+  color: #b78ef5;
 }
 
 a.view-link:hover {
-  background: rgba(91, 46, 138, 0.08);
-  border-color: #5b2e8a;
+  background: rgba(183, 142, 245, 0.14);
+  border-color: #b78ef5;
 }
 
 /* Responsive adjustments */

@@ -314,6 +314,11 @@ def sprints_view():
     return render_template('sprints.html')
 
 
+@app.route('/settings')
+def settings_view():
+    return render_template('settings.html')
+
+
 @app.route('/api/board', methods=['GET'])
 def get_board():
     # Hidden columns (and their cards) are left out unless ?include_hidden=true

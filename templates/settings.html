@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Settings - Personal Kanban</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+  </head>
+  <body class="settings-page">
+    <header>
+      <div class="header-top">
+        <div class="view-switcher">
+          <a href="/" class="view-link">🎯 Board</a>
+          <a href="/list" class="view-link">📋 List</a>
+          <a href="/sprints" class="view-link">🏃 Sprints</a>
+        </div>
+        <div class="project-filters"></div>
+        <span class="view-link active">⚙️ Settings</span>
+      </div>
+    </header>
+    <main class="settings-main">
+      <div class="settings-container">
+        <h1>Board Settings</h1>
+    <div class="settings-tabs" role="tablist">
+          <button type="button" class="settings-tab-btn active" data-tab="statuses">Statuses</button>
+          <button type="button" class="settings-tab-btn" data-tab="projects">Projects</button>
+          <button type="button" class="settings-tab-btn" data-tab="import">Import/Export</button>
+          <button type="button" class="settings-tab-btn" data-tab="about">About</button>
+        </div>
+        <div class="settings-tab-panels">
+          <div class="settings-tab-panel active" data-tab="statuses">
+            <div id="columnsList" class="columns-list"></div>
+            <div class="add-column">
+              <input id="newColumnTitle" placeholder="New column title" />
+              <input id="newColumnColor" type="color" value="#9aa0a6" />
+              <button id="addColumnBtn">Add Column</button>
+            </div>
+          </div>
+          <div class="settings-tab-panel" data-tab="projects">
+            <div id="projectsList" class="projects-list"></div>
+            <div class="add-project">
+              <input id="newProjectName" placeholder="New project name" />
+              <input id="newProjectColor" type="color" value="#5b2e8a" />
+              <button id="addProjectBtn">Add Project</button>
+            </div>
+          </div>
+          <div class="settings-tab-panel" data-tab="import">
+            <div class="import-export-panel">
+              <section class="import-block">
+                <h3>Export Board</h3>
+                <p>Download the current kanban.json file for safekeeping or migration.</p>
+                <button type="button" id="downloadBoardBtn">Download kanban.json</button>
+              </section>
+              <section class="import-block">
+                <h3>Import Board</h3>
+                <p>Select a saved kanban.json file and choose whether to merge or replace your current board.</p>
+                <input type="file" id="importFileInput" accept="application/json" />
+                <div class="import-mode">
+                  <label><input type="radio" name="importMode" value="merge" checked /> Merge with existing data</label>
+                  <label><input type="radio" name="importMode" value="replace" /> Replace existing data</label>
+                </div>
+                <div class="import-actions">
+                  <button type="button" id="importBoardBtn">Import kanban.json</button>
+                </div>
+              </section>
+            </div>
+          </div>
+          <div class="settings-tab-panel" data-tab="about">
+            <div style="padding: 20px; text-align: center;">
+              <h3>Personal Kanban</h3>
+              <p style="font-size: 14px; color: rgba(255, 255, 255, 0.7); margin: 16px 0;">
+                Version 1.4
+              </p>
+              <p style="font-size: 14px; color: rgba(255, 255, 255, 0.7); margin: 16px 0;">
+                Written by Stuart Weenig
+              </p>
+              <p style="font-size: 14px; margin: 16px 0;">
+                <a href="https://github.com/sweenig/perkan" target="_blank" rel="noopener noreferrer">github.com/sweenig/perkan</a>
+              </p>
+              <p style="font-size: 12px; color: rgba(255, 255, 255, 0.6); margin-top: 24px;">
+                Licensed under GNU General Public License v3
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <script src="/static/settings.js"></script>
+  </body>
+</html>

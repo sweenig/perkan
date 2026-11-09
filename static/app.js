@@ -298,8 +298,7 @@ projectPreview.addEventListener('click', (e) => {
   if(e.target.closest('.project-preview-edit')){
     const projectName = projectPreview.dataset.project || '';
     hideProjectPreviewImmediate();
-    openSettingsModal('projects');
-    focusProjectInSettings(projectName);
+    window.location.href = '/settings?tab=projects&project=' + encodeURIComponent(projectName);
   }
 });
 
@@ -340,12 +339,12 @@ function createCardElement(card, projectMap) {
   `;
 
   const cardColor = projectColor || card.color || '#5b2e8a';
-  el.style.borderColor = cardColor;
+  el.style.borderColor = readableOnDark(cardColor, 3);
   el.style.borderWidth = '2px';
   el.style.backgroundColor = hexToRgba(cardColor, 0.06);
   if(projectColor){
-    el.style.setProperty('--project-pill-border', projectColor);
-    el.style.setProperty('--project-pill-text', projectColor);
+    el.style.setProperty('--project-pill-border', readableOnDark(projectColor, 3));
+    el.style.setProperty('--project-pill-text', readableOnDark(projectColor));
     el.style.setProperty('--project-pill-bg', hexToRgba(projectColor, 0.12));
   } else {
     el.style.removeProperty('--project-pill-border');
@@ -471,7 +470,7 @@ function renderProjectFilters(board, projectMap){
 
     const dot = document.createElement('span');
     dot.className = 'project-filter-pill-dot';
-    dot.style.backgroundColor = safeColor;
+    dot.style.backgroundColor = readableOnDark(safeColor, 3);
 
     const label = document.createElement('span');
     label.className = 'project-filter-pill-label';
@@ -525,7 +524,7 @@ async function render(options = {}){
 
     // apply color styling
     const outline = col.color || '#e0e0e0';
-    colEl.style.borderColor = outline;
+    colEl.style.borderColor = readableOnDark(outline, 3);
     colEl.style.borderWidth = '2px';
     colEl.style.backgroundColor = hexToRgba(outline, 0.06);
 
@@ -587,269 +586,6 @@ async function render(options = {}){
 }
 
 // Global add removed: use per-column + buttons to add cards.
-
-// Settings modal
-const settingsModal = document.createElement('div');
-settingsModal.id = 'settingsModal';
-// hidden by default
-settingsModal.className = 'modal hidden';
-settingsModal.innerHTML = `
-  <div class="modal-backdrop"></div>
-  <div class="modal-content">
-    <h2>Board Settings</h2>
-    <div class="settings-tabs" role="tablist">
-      <button type="button" class="settings-tab-btn active" data-tab="statuses">Statuses</button>
-      <button type="button" class="settings-tab-btn" data-tab="projects">Projects</button>
-      <button type="button" class="settings-tab-btn" data-tab="import">Import/Export</button>
-      <button type="button" class="settings-tab-btn" data-tab="about">About</button>
-    </div>
-    <div class="settings-tab-panels">
-      <div class="settings-tab-panel active" data-tab="statuses">
-        <div id="columnsList" class="columns-list"></div>
-        <div class="add-column">
-          <input id="newColumnTitle" placeholder="New column title" />
-          <input id="newColumnColor" type="color" value="#9aa0a6" />
-          <button id="addColumnBtn">Add Column</button>
-        </div>
-      </div>
-      <div class="settings-tab-panel" data-tab="projects">
-        <div id="projectsList" class="projects-list"></div>
-        <div class="add-project">
-          <input id="newProjectName" placeholder="New project name" />
-          <input id="newProjectColor" type="color" value="#5b2e8a" />
-          <button id="addProjectBtn">Add Project</button>
-        </div>
-      </div>
-      <div class="settings-tab-panel" data-tab="import">
-        <div class="import-export-panel">
-          <section class="import-block">
-            <h3>Export Board</h3>
-            <p>Download the current kanban.json file for safekeeping or migration.</p>
-            <button type="button" id="downloadBoardBtn">Download kanban.json</button>
-          </section>
-          <section class="import-block">
-            <h3>Import Board</h3>
-            <p>Select a saved kanban.json file and choose whether to merge or replace your current board.</p>
-            <input type="file" id="importFileInput" accept="application/json" />
-            <div class="import-mode">
-              <label><input type="radio" name="importMode" value="merge" checked /> Merge with existing data</label>
-              <label><input type="radio" name="importMode" value="replace" /> Replace existing data</label>
-            </div>
-            <div class="import-actions">
-              <button type="button" id="importBoardBtn">Import kanban.json</button>
-            </div>
-          </section>
-        </div>
-      </div>
-      <div class="settings-tab-panel" data-tab="about">
-        <div style="padding: 20px; text-align: center;">
-          <h3>Personal Kanban</h3>
-          <p style="font-size: 14px; color: rgba(255, 255, 255, 0.7); margin: 16px 0;">
-            Version 1.0
-          </p>
-          <p style="font-size: 14px; color: rgba(255, 255, 255, 0.7); margin: 16px 0;">
-            Written by Stuart Weenig
-          </p>
-          <p style="font-size: 12px; color: rgba(255, 255, 255, 0.6); margin-top: 24px;">
-            Licensed under GNU General Public License v3
-          </p>
-        </div>
-      </div>
-    </div>
-    <div class="modal-actions"><button id="closeSettings">Close</button></div>
-  </div>
-`;
-document.body.appendChild(settingsModal);
-
-async function renderStatusSettings(){
-  const board = await fetchBoard();
-  const list = document.getElementById('columnsList');
-  list.innerHTML = '';
-  board.columns.forEach((col, idx)=>{
-    const row = document.createElement('div');
-    row.className = 'col-row';
-    row.innerHTML = `
-      <input class="col-title" data-id="${col.id}" value="${escapeHtml(col.title)}" />
-      <input class="col-color" type="color" data-id="${col.id}" value="${col.color || '#9aa0a6'}" />
-      <label class="col-hide-toggle">
-        <input class="col-hidden" type="checkbox" data-id="${col.id}" ${col.hidden ? 'checked' : ''} />
-        Hide
-      </label>
-      <label class="col-hide-toggle" title="Cards moved into this column get a completion date">
-        <input class="col-done" type="checkbox" data-id="${col.id}" ${col.is_done ? 'checked' : ''} />
-        Done
-      </label>
-      <label class="col-hide-toggle" title="The done column new finished cards go to (only one; setting it clears the others)">
-        <input class="col-current-done" type="radio" name="col-current-done" data-id="${col.id}" ${col.is_current_done ? 'checked' : ''} />
-        Current
-      </label>
-      <button class="col-up" data-id="${col.id}" data-idx="${idx}" ${idx===0? 'disabled':''}>↑</button>
-      <button class="col-down" data-id="${col.id}" data-idx="${idx}" ${idx===board.columns.length-1? 'disabled':''}>↓</button>
-      <button class="col-delete" data-id="${col.id}">Delete</button>
-    `;
-    list.appendChild(row);
-  });
-
-  // attach handlers
-  document.querySelectorAll('.col-title').forEach(inp=>{
-    inp.addEventListener('change', async (e)=>{
-      const id = e.target.dataset.id;
-      const title = e.target.value.trim();
-      if(!title) return alert('title required');
-      await fetch('/api/column/' + id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({title})});
-      render();
-      renderStatusSettings();
-    });
-  });
-  document.querySelectorAll('.col-color').forEach(inp=>{
-    inp.addEventListener('change', async (e)=>{
-      const id = e.target.dataset.id;
-      const color = e.target.value;
-      await fetch('/api/column/' + id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({color})});
-      render();
-      renderStatusSettings();
-    });
-  });
-  document.querySelectorAll('.col-done').forEach(inp=>{
-    inp.addEventListener('change', async (e)=>{
-      const id = e.target.dataset.id;
-      const is_done = e.target.checked;
-      await fetch('/api/column/' + id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({is_done})});
-      render();
-    });
-  });
-  document.querySelectorAll('.col-current-done').forEach(inp=>{
-    inp.addEventListener('change', async (e)=>{
-      const id = e.target.dataset.id;
-      await fetch('/api/column/' + id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({is_current_done:true})});
-      render();
-    });
-  });
-  document.querySelectorAll('.col-hidden').forEach(inp=>{
-    inp.addEventListener('change', async (e)=>{
-      const id = e.target.dataset.id;
-      const hidden = e.target.checked;
-      await fetch('/api/column/' + id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({hidden})});
-      render();
-      renderStatusSettings();
-    });
-  });
-  document.querySelectorAll('.col-up').forEach(btn=>{
-    btn.addEventListener('click', async (e)=>{
-      const id = e.target.dataset.id;
-      const idx = parseInt(e.target.dataset.idx, 10);
-      const targetPos = Math.max(0, idx - 1);
-      await fetch('/api/column/' + id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({position:targetPos})});
-      // re-render to reflect the swap
-      render();
-      renderStatusSettings();
-    });
-  });
-  document.querySelectorAll('.col-down').forEach(btn=>{
-    btn.addEventListener('click', async (e)=>{
-      const id = e.target.dataset.id;
-      const idx = parseInt(e.target.dataset.idx, 10);
-      const targetPos = idx + 1;
-      await fetch('/api/column/' + id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({position:targetPos})});
-      render();
-      renderStatusSettings();
-    });
-  });
-  document.querySelectorAll('.col-delete').forEach(btn=>{
-    btn.addEventListener('click', async (e)=>{
-      const id = e.target.dataset.id;
-      if(!confirm('Delete this column? Cards in it will be removed unless moved.')) return;
-      const boardNow = await fetchBoard();
-      if(boardNow.columns.length <= 1){
-        return alert('Cannot delete the last column');
-      }
-      await fetch('/api/column/' + id, {method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
-      render();
-      renderStatusSettings();
-    });
-  });
-
-  refreshProjectInputs();
-}
-
-async function renderProjectSettings(){
-  const board = await fetchBoard();
-  const list = document.getElementById('projectsList');
-  if(!list) return;
-  list.innerHTML = '';
-  const projects = Array.isArray(board.projects) ? board.projects : [];
-  if(!projects.length){
-    const empty = document.createElement('div');
-    empty.className = 'project-empty';
-    empty.textContent = 'No projects yet';
-    list.appendChild(empty);
-  }
-  projects.forEach((proj, idx) => {
-    const row = document.createElement('div');
-    row.className = 'project-row';
-    row.innerHTML = `
-      <input class="project-name" data-index="${idx}" value="${escapeHtml(proj.name || '')}" placeholder="Project name" />
-      <input class="project-color" type="color" data-index="${idx}" value="${proj.color || '#5b2e8a'}" />
-      <button class="project-up" data-index="${idx}" ${idx===0? 'disabled':''}>↑</button>
-      <button class="project-down" data-index="${idx}" ${idx===projects.length-1? 'disabled':''}>↓</button>
-      <button class="project-delete" data-index="${idx}">Delete</button>
-    `;
-    list.appendChild(row);
-  });
-
-  list.querySelectorAll('.project-name').forEach(inp => {
-    inp.addEventListener('change', async (e) => {
-      const idx = parseInt(e.target.dataset.index, 10);
-      const name = e.target.value.trim();
-      if(!name){
-        alert('name required');
-        await renderProjectSettings();
-        return;
-      }
-      await fetch('/api/project/' + idx, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
-      await render();
-      await renderProjectSettings();
-    });
-  });
-  list.querySelectorAll('.project-color').forEach(inp => {
-    inp.addEventListener('change', async (e) => {
-      const idx = parseInt(e.target.dataset.index, 10);
-      const color = e.target.value;
-      await fetch('/api/project/' + idx, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({color})});
-      await render();
-      await renderProjectSettings();
-    });
-  });
-  list.querySelectorAll('.project-up').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      const idx = parseInt(e.target.dataset.index, 10);
-      const targetPos = Math.max(0, idx - 1);
-      await fetch('/api/project/' + idx, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({position:targetPos})});
-      await render();
-      await renderProjectSettings();
-    });
-  });
-  list.querySelectorAll('.project-down').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      const idx = parseInt(e.target.dataset.index, 10);
-      const targetPos = idx + 1;
-      await fetch('/api/project/' + idx, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({position:targetPos})});
-      await render();
-      await renderProjectSettings();
-    });
-  });
-  list.querySelectorAll('.project-delete').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      const idx = parseInt(e.target.dataset.index, 10);
-      if(!confirm('Delete this project?')) return;
-      await fetch('/api/project/' + idx, {method:'DELETE'});
-      await render();
-      await renderProjectSettings();
-    });
-  });
-
-  refreshProjectInputs();
-}
 
 const projectPickerRegistry = new Map();
 let projectPickerDocListenerAttached = false;
@@ -1037,141 +773,6 @@ function refreshProjectInputs(){
   projectPickerRegistry.forEach(state => buildProjectPickerMenu(state));
 }
 
-async function downloadBoardJson(){
-  try {
-    const res = await fetch('/api/board/export');
-    if(!res.ok){
-      throw new Error('Failed to download board');
-    }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = 'kanban.json';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    setTimeout(()=>URL.revokeObjectURL(url), 0);
-  } catch(err){
-    console.error(err);
-    alert('Unable to download the board data.');
-  }
-}
-
-async function importBoardJson(){
-  const fileInput = document.getElementById('importFileInput');
-  if(!fileInput || !fileInput.files || !fileInput.files.length){
-    alert('Select a kanban.json file to import.');
-    return;
-  }
-  const modeInput = document.querySelector('input[name="importMode"]:checked');
-  const mode = modeInput ? modeInput.value : 'merge';
-  const confirmMsg = mode === 'replace'
-    ? 'Replace the current board with the selected file? This cannot be undone.'
-    : 'Merge the selected board into your current data?';
-  if(!confirm(confirmMsg)){
-    return;
-  }
-  const formData = new FormData();
-  formData.append('file', fileInput.files[0]);
-  formData.append('mode', mode);
-  try {
-    const res = await fetch('/api/board/import', {method:'POST', body: formData});
-    const payload = await res.json().catch(()=>({}));
-    if(!res.ok){
-      const message = payload && payload.error ? payload.error : 'Import failed';
-      alert(message);
-      return;
-    }
-    fileInput.value = '';
-    await render();
-    const activeTabBtn = document.querySelector('.settings-tab-btn.active');
-    if(activeTabBtn){
-      if(activeTabBtn.dataset.tab === 'projects'){
-        await renderProjectSettings();
-      } else if(activeTabBtn.dataset.tab === 'statuses'){
-        await renderStatusSettings();
-      }
-    }
-    alert('Import complete.');
-  } catch(err){
-    console.error(err);
-    alert('Unable to import the selected file.');
-  }
-}
-
-function activateSettingsTab(tabId){
-  const modal = document.getElementById('settingsModal');
-  if(!modal) return;
-  modal.querySelectorAll('.settings-tab-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.tab === tabId);
-  });
-  modal.querySelectorAll('.settings-tab-panel').forEach(panel => {
-    panel.classList.toggle('active', panel.dataset.tab === tabId);
-  });
-  if(tabId === 'statuses'){
-    renderStatusSettings();
-  } else if(tabId === 'projects'){
-    renderProjectSettings();
-  }
-}
-
-function openSettingsModal(tabId){
-  const modal = document.getElementById('settingsModal');
-  if(!modal) return;
-  const modalContent = modal.querySelector('.modal-content');
-  const modalPurple = '#b78ef5';
-  if(modal.classList.contains('hidden')){
-    modal.classList.remove('hidden');
-    if(modalContent){
-      modalContent.style.borderColor = modalPurple;
-      modalContent.style.borderWidth = '2px';
-      modalContent.style.backgroundColor = '#0f0f18';
-    }
-  }
-  activateSettingsTab(tabId || 'statuses');
-}
-
-function closeSettingsModal(){
-  const modal = document.getElementById('settingsModal');
-  if(!modal) return;
-  const modalContent = modal.querySelector('.modal-content');
-  if(modalContent){
-    modalContent.style.borderColor = '';
-    modalContent.style.borderWidth = '';
-    modalContent.style.backgroundColor = '';
-  }
-  modal.classList.add('hidden');
-}
-
-function focusProjectInSettings(projectName){
-  if(!projectName) return;
-  let attempts = 0;
-  const tryFocus = () => {
-    const list = document.getElementById('projectsList');
-    if(list){
-      const inputs = Array.from(list.querySelectorAll('.project-name'));
-      const target = inputs.find(inp => inp.value.trim() === projectName.trim());
-      if(target){
-        target.focus();
-        target.select();
-        return;
-      }
-    }
-    attempts += 1;
-    if(attempts < 5){
-      setTimeout(tryFocus, 120);
-    }
-  };
-  tryFocus();
-}
-
-document.querySelectorAll('.settings-tab-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    activateSettingsTab(btn.dataset.tab);
-  });
-});
-
 const truncateBtn = document.getElementById('truncateBtn');
 if(truncateBtn){
   // Only attach listener if we're on the board view (boardEl exists)
@@ -1188,71 +789,8 @@ if(truncateBtn){
   }
 }
 
-const settingsBtn = document.getElementById('settingsBtn');
-if(settingsBtn){
-  settingsBtn.addEventListener('click', ()=>{
-    const modal = document.getElementById('settingsModal');
-    if(modal.classList.contains('hidden')){
-      openSettingsModal('statuses');
-    } else {
-      closeSettingsModal();
-    }
-  });
-}
-
-const closeSettingsBtn = document.getElementById('closeSettings');
-if(closeSettingsBtn){
-  closeSettingsBtn.addEventListener('click', ()=>{
-    closeSettingsModal();
-  });
-}
-
-const addColumnBtn = document.getElementById('addColumnBtn');
-if(addColumnBtn){
-  addColumnBtn.addEventListener('click', async ()=>{
-    const title = document.getElementById('newColumnTitle').value.trim();
-    const color = document.getElementById('newColumnColor').value;
-    if(!title) return alert('title required');
-    await fetch('/api/column', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title, color})});
-    document.getElementById('newColumnTitle').value = '';
-    document.getElementById('newColumnColor').value = '#9aa0a6';
-    render();
-    renderStatusSettings();
-  });
-}
-
-const addProjectBtn = document.getElementById('addProjectBtn');
-if(addProjectBtn){
-  addProjectBtn.addEventListener('click', async ()=>{
-    const name = document.getElementById('newProjectName').value.trim();
-    const color = document.getElementById('newProjectColor').value;
-    if(!name) return alert('name required');
-    await fetch('/api/project', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name, color})});
-    document.getElementById('newProjectName').value = '';
-    document.getElementById('newProjectColor').value = '#5b2e8a';
-    await render();
-    await renderProjectSettings();
-  });
-}
-
-const downloadBoardBtn = document.getElementById('downloadBoardBtn');
-if(downloadBoardBtn){
-  downloadBoardBtn.addEventListener('click', ()=>{
-    downloadBoardJson();
-  });
-}
-
-const importBoardBtn = document.getElementById('importBoardBtn');
-if(importBoardBtn){
-  importBoardBtn.addEventListener('click', ()=>{
-    importBoardJson();
-  });
-}
-
 // close modal when clicking backdrop
 document.addEventListener('click', (e)=>{
-  const modal = document.getElementById('settingsModal');
-  if(modal && e.target.classList.contains('modal-backdrop') && modal.contains(e.target)) closeSettingsModal();
   // card modal backdrop
   const cardModal = document.getElementById('cardModal');
   if(cardModal && e.target.classList.contains('modal-backdrop')) cardModal.classList.add('hidden');

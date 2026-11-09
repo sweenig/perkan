@@ -73,7 +73,7 @@ function listCreateTableRow(card, index, projectMap) {
   // Create the background color for the row based on column color
   const columnColorBg = listHexToRgba(card.columnColor, 0.05);
   row.style.backgroundColor = columnColorBg;
-  row.style.borderLeftColor = card.columnColor;
+  row.style.borderLeftColor = readableOnDark(card.columnColor, 3);
   row.style.borderLeftWidth = '4px';
   row.style.borderLeftStyle = 'solid';
 
@@ -110,7 +110,7 @@ function listCreateTableRow(card, index, projectMap) {
   if (projectName) {
     const badgeColor = projectColor || '#5b2e8a';
     projectCell.innerHTML = `
-      <div class="list-project-badge" style="background: ${listHexToRgba(badgeColor, 0.12)}; border: 2px solid ${badgeColor}; color: ${badgeColor};">
+      <div class="list-project-badge" style="background: ${listHexToRgba(badgeColor, 0.12)}; border: 2px solid ${readableOnDark(badgeColor, 3)}; color: ${readableOnDark(badgeColor)};">
         ${listEscapeHtml(projectName)}
       </div>
     `;
@@ -135,7 +135,7 @@ function listCreateTableRow(card, index, projectMap) {
   const columnCell = document.createElement('td');
   columnCell.className = 'list-cell list-cell-column';
   columnCell.innerHTML = `
-    <div class="list-column-badge" style="background: ${listHexToRgba(card.columnColor, 0.12)}; border: 2px solid ${card.columnColor}; color: ${listHexToRgba(card.columnColor, 1)};">
+    <div class="list-column-badge" style="background: ${listHexToRgba(card.columnColor, 0.12)}; border: 2px solid ${readableOnDark(card.columnColor, 3)}; color: ${readableOnDark(card.columnColor)};">
       ${listEscapeHtml(card.columnTitle)}
     </div>
   `;
@@ -443,7 +443,7 @@ function listRenderProjectFilters(board, projectMap) {
 
     const dot = document.createElement('span');
     dot.className = 'project-filter-pill-dot';
-    dot.style.backgroundColor = safeColor;
+    dot.style.backgroundColor = readableOnDark(safeColor, 3);
 
     const label = document.createElement('span');
     label.className = 'project-filter-pill-label';
