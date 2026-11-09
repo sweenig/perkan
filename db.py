@@ -25,7 +25,7 @@ DATA_DIR = os.environ.get('PERKAN_DATA_DIR') or os.path.join(os.path.dirname(__f
 DB_FILE = os.path.join(DATA_DIR, 'perkan.db')
 LEGACY_JSON = os.path.join(DATA_DIR, 'kanban.json')
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 ORDER_STEP = 1_000_000.0
 MIN_GAP = 1e-3   # below this, neighbouring order values are renumbered to make room
 
@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS sprints (
     closed_at  TEXT,
     committed  INTEGER,
     completed  INTEGER,
-    carried    INTEGER
+    carried    INTEGER,
+    added      INTEGER
 );
 CREATE TABLE IF NOT EXISTS cards (
     id          TEXT PRIMARY KEY,
@@ -195,8 +196,13 @@ def load_board(conn, include_hidden=False, include_closed=False):
     ids = [r['id'] for r in rows]
     links = _links_for(conn, ids)
     dates = card_dates(conn, ids)
+    adds = mid_sprint_additions(conn)
     for row in rows:
-        by_id[row['column_id']]['cards'].append(card_from_row(row, links.get(row['id'], []), dates))
+        card = card_from_row(row, links.get(row['id'], []), dates)
+        if row['id'] in adds:
+            card['added_after_start'] = True
+            card['added_to_sprint_at'] = adds[row['id']]
+        by_id[row['column_id']]['cards'].append(card)
 
     projects = [{'name': r['name'], 'color': r['color']}
                 for r in conn.execute('SELECT name, color FROM projects ORDER BY position')]
@@ -277,15 +283,48 @@ def list_cards(conn, column=None, project=None, assignee=None, query=None,
     links = _links_for(conn, ids)
     dates = card_dates(conn, ids)
     cards = [dict(card_from_row(r, links.get(r['id'], []), dates), column=r['col_id']) for r in rows]
-    return cards, total
+    return _flag_additions(conn, cards), total
+
+
+def mid_sprint_additions(conn, card_ids=None, by_sprint=False):
+    """{card id: time it was added} for cards now in a sprint that they entered after it started.
+
+    A card counts when its latest move into its current sprint happened after that sprint's started_at
+    (cards carried over or planned before the start do not). Backlog and planned-sprint cards never count.
+    With by_sprint (and no card_ids) returns {sprint id: number of such cards} instead.
+    """
+    sql = ('SELECT cards.id AS id, cards.sprint_id AS sid, MAX(h.at) AS at FROM cards '
+           'JOIN sprints ON sprints.id = cards.sprint_id AND sprints.started_at IS NOT NULL '
+           'JOIN card_sprint_history h ON h.card_id = cards.id AND h.to_sprint = cards.sprint_id '
+           'GROUP BY cards.id, sprints.started_at HAVING MAX(h.at) > sprints.started_at')
+    rows = conn.execute(sql).fetchall()
+    if card_ids is None and by_sprint:
+        counts = {}
+        for r in rows:
+            counts[r['sid']] = counts.get(r['sid'], 0) + 1
+        return counts
+    out = {r['id']: r['at'] for r in rows}
+    if card_ids is not None:
+        keep = set(card_ids)
+        out = {k: v for k, v in out.items() if k in keep}
+    return out
+
+
+def _flag_additions(conn, cards):
+    adds = mid_sprint_additions(conn, [c['id'] for c in cards]) if any(c.get('sprint') for c in cards) else {}
+    for c in cards:
+        if c['id'] in adds:
+            c['added_after_start'] = True
+            c['added_to_sprint_at'] = adds[c['id']]
+    return cards
 
 
 def get_card(conn, card_id):
     row = conn.execute('SELECT * FROM cards WHERE id = ?', (card_id,)).fetchone()
     if row is None:
         return None, None
-    return (card_from_row(row, _links_for(conn, [card_id]).get(card_id, []), card_dates(conn, [card_id])),
-            row['column_id'])
+    card = card_from_row(row, _links_for(conn, [card_id]).get(card_id, []), card_dates(conn, [card_id]))
+    return _flag_additions(conn, [card])[0], row['column_id']
 
 
 # ---------------------------------------------------------------- writing cards
@@ -425,6 +464,8 @@ def card_stats(conn, project=None, created_since=None, completed_since=None, now
                'is_done': c['column'] in done}
         if c.get('sprint'):
             row['sprint'] = c['sprint']
+        if c.get('added_after_start'):
+            row['added_after_start'] = True
         for key in ('created_at', 'started_at', 'completed_at', 'column_since'):
             if c.get(key):
                 row[key] = c[key]
@@ -462,8 +503,10 @@ def card_stats(conn, project=None, created_since=None, completed_since=None, now
         sub = by_sprint.get(sp['id'], [])
         closed = sp['state'] == 'closed'
         entry = {'name': sp['name'], 'state': sp['state'], 'start_date': sp['start_date'], 'end_date': sp['end_date'],
-                 'committed': sp['committed'] if closed else sp['cards'],
+                 'committed': sp['committed'] if closed else sp['cards'] - sp['added'],
                  'completed': sp['completed'] if closed else sp['done']}
+        if sp['added'] is not None:
+            entry['added'] = sp['added']
         if closed:
             entry['carried'] = sp['carried']
         entry.update(summarize(sub))
@@ -613,9 +656,9 @@ def replace_board(conn, board):
         conn.execute('DELETE FROM sprints')
         for sp in board['sprints']:
             conn.execute('INSERT INTO sprints (id, name, goal, start_date, end_date, state, started_at, closed_at, '
-                         'committed, completed, carried) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                         'committed, completed, carried, added) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
                          (sp['id'], sp['name'], sp['goal'], sp['start_date'], sp['end_date'], sp['state'],
-                          sp['started_at'], sp['closed_at'], sp['committed'], sp['completed'], sp['carried']))
+                          sp['started_at'], sp['closed_at'], sp['committed'], sp['completed'], sp['carried'], sp.get('added')))
     conn.execute('DELETE FROM columns')
     conn.execute('DELETE FROM projects')
     for i, col in enumerate(board.get('columns', [])):
@@ -673,13 +716,15 @@ def _check_date(value, name):
         raise SprintError(f'{name} is not a valid date')
 
 
-def _sprint_dict(row, counts, today_str):
+def _sprint_dict(row, counts, today_str, added=0):
     d = {'id': row['id'], 'name': row['name'], 'goal': row['goal'], 'state': row['state'],
          'start_date': row['start_date'], 'end_date': row['end_date'],
          'started_at': row['started_at'], 'closed_at': row['closed_at'],
          'cards': counts[0], 'done': counts[1]}
     if row['state'] == 'closed':
-        d.update(committed=row['committed'], completed=row['completed'], carried=row['carried'])
+        d.update(committed=row['committed'], completed=row['completed'], carried=row['carried'], added=row['added'])
+    else:
+        d['added'] = added
     if row['state'] == 'active' and row['end_date'] < today_str:
         d['overdue_days'] = (_check_date(today_str, 'today') - _check_date(row['end_date'], 'end_date')).days
     return d
@@ -704,14 +749,16 @@ def list_sprints(conn, include_closed=False):
     rows.sort(key=lambda r: (rank[r['state']], r['end_date'] if r['state'] != 'closed' else '', r['id']))
     closed = sorted([r for r in rows if r['state'] == 'closed'], key=lambda r: r['end_date'], reverse=True)
     rows = [r for r in rows if r['state'] != 'closed'] + closed
-    return [_sprint_dict(r, counts.get(r['id'], (0, 0)), t) for r in rows]
+    added = mid_sprint_additions(conn, by_sprint=True)
+    return [_sprint_dict(r, counts.get(r['id'], (0, 0)), t, added.get(r['id'], 0)) for r in rows]
 
 
 def get_sprint(conn, sprint_id):
     row = conn.execute('SELECT * FROM sprints WHERE id = ?', (sprint_id,)).fetchone()
     if row is None:
         return None
-    return _sprint_dict(row, _sprint_counts(conn).get(sprint_id, (0, 0)), today())
+    added = mid_sprint_additions(conn, by_sprint=True).get(sprint_id, 0)
+    return _sprint_dict(row, _sprint_counts(conn).get(sprint_id, (0, 0)), today(), added)
 
 
 def active_sprint(conn):
@@ -845,9 +892,11 @@ def complete_sprint(conn, sprint_id, unfinished='carry_over', next_sprint=None, 
             end = next_end_date or (_check_date(row['end_date'], 'end_date') + timedelta(days=7)).strftime('%Y-%m-%d')
             target = create_sprint(conn, end, name=next_name)
 
+    added_n = mid_sprint_additions(conn, by_sprint=True).get(sprint_id, 0)
     now = now_iso()
-    conn.execute("UPDATE sprints SET state = 'closed', closed_at = ?, committed = ?, completed = ?, carried = ? "
-                 "WHERE id = ?", (now, len(cards), done_n, len(open_ids) if unfinished == 'carry_over' else 0, sprint_id))
+    conn.execute("UPDATE sprints SET state = 'closed', closed_at = ?, committed = ?, completed = ?, carried = ?, "
+                 "added = ? WHERE id = ?",
+                 (now, len(cards) - added_n, done_n, len(open_ids) if unfinished == 'carry_over' else 0, added_n, sprint_id))
     if unfinished == 'carry_over':
         for cid in open_ids:
             conn.execute('UPDATE cards SET sprint_id = ? WHERE id = ?', (target, cid))
@@ -861,7 +910,7 @@ def complete_sprint(conn, sprint_id, unfinished='carry_over', next_sprint=None, 
     if start_next and target:
         start_sprint(conn, target)
     return {'sprint': get_sprint(conn, sprint_id), 'next_sprint': get_sprint(conn, target) if target else None,
-            'committed': len(cards), 'completed': done_n, 'unfinished': len(open_ids), 'unfinished_action': unfinished}
+            'committed': len(cards) - added_n, 'added': added_n, 'completed': done_n, 'unfinished': len(open_ids), 'unfinished_action': unfinished}
 
 
 def delete_sprint(conn, sprint_id):
@@ -1027,6 +1076,13 @@ def _migrate_5_to_6(conn):
     logger.info('Migrated schema v5 -> v6: added sprints (all cards start in the backlog)')
 
 
+def _migrate_6_to_7(conn):
+    """v7 adds sprints.added (cards added after the sprint started, snapshotted when it closes).
+    Closed sprints keep it empty: committed there still counts every card."""
+    conn.execute('ALTER TABLE sprints ADD COLUMN added INTEGER')
+    logger.info('Migrated schema v6 -> v7: added sprints.added')
+
+
 def init(normalize, default_board):
     """Create or upgrade the database; on first run import kanban.json (or seed a blank board).
 
@@ -1048,7 +1104,7 @@ def init(normalize, default_board):
         version = conn.execute('PRAGMA user_version').fetchone()[0]
         if version >= SCHEMA_VERSION:
             return
-        if version in (1, 2, 3, 4, 5):
+        if version in (1, 2, 3, 4, 5, 6):
             if version == 1:
                 _migrate_1_to_2(conn)
             if version <= 2:
@@ -1057,7 +1113,9 @@ def init(normalize, default_board):
                 _migrate_3_to_4(conn)
             if version <= 4:
                 _migrate_4_to_5(conn)
-            _migrate_5_to_6(conn)
+            if version <= 5:
+                _migrate_5_to_6(conn)
+            _migrate_6_to_7(conn)
         else:
             if os.path.exists(LEGACY_JSON):
                 with open(LEGACY_JSON, 'r', encoding='utf-8') as f:

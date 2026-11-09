@@ -590,6 +590,30 @@ class SprintTests(Base):
         # cards cannot be moved into the closed sprint
         self.assertEqual(self.c.put('/api/card/t2', json={'sprint': a['id']}).status_code, 400)
 
+    def test_mid_sprint_additions(self):
+        a = self.mk('2026-12-01')
+        self.c.put('/api/card/t1', json={'sprint': a['id']})            # planned before the start
+        self.c.post('/api/sprint/%s/start' % a['id'])
+        with db.write() as conn:                                        # pretend it started an hour ago
+            conn.execute("UPDATE sprints SET started_at = '2000-01-01T00:00:00Z' WHERE id = ?", (a['id'],))
+            conn.execute("UPDATE card_sprint_history SET at = '1999-12-31T00:00:00Z' WHERE card_id = 't1'")
+        self.c.put('/api/card/d1', json={'sprint': a['id']})            # added after the start
+        new = self.c.post('/api/card', json={'title': 'late', 'sprint': 'active'}).get_json()
+        self.assertTrue(new['added_after_start'])
+        cards = {c['id']: c for c in self.get('/api/cards?sprint=active')['cards']}
+        self.assertNotIn('added_after_start', cards['t1'])
+        self.assertTrue(cards['d1']['added_after_start'])
+        board = {c['id']: c for col in self.get('/api/board')['columns'] for c in col['cards']}
+        self.assertTrue(board['d1']['added_after_start'])
+        self.assertNotIn('added_after_start', board['t1'])
+        self.assertEqual(self.get('/api/sprints')['sprints'][0]['added'], 2)
+        st = self.get('/api/stats')['by_sprint'][a['id']]
+        self.assertEqual((st['committed'], st['added']), (1, 2))
+        self.c.put('/api/card/d1', json={'sprint': 'backlog'})          # leaving drops the flag
+        self.assertEqual(self.get('/api/sprints')['sprints'][0]['added'], 1)
+        j = self.c.post('/api/sprint/%s/complete' % a['id'], json={'unfinished': 'backlog'}).get_json()
+        self.assertEqual((j['committed'], j['added'], j['sprint']['added']), (1, 1, 1))
+
     def test_stats_by_sprint(self):
         a = self.mk('2026-12-01')
         self.c.post('/api/sprint/%s/start' % a['id'])

@@ -162,9 +162,11 @@ function sectionFor(sprint, hasActive) {
   const doneN = items.filter(isDone).length;
   if (closed) {
     head.appendChild(el('span', 'sp-meta', `committed ${sprint.committed ?? '?'} · completed ${sprint.completed ?? '?'}` +
+      (sprint.added ? ` · added mid-sprint ${sprint.added}` : '') +
       (sprint.carried ? ` · carried ${sprint.carried}` : '')));
   } else {
     head.appendChild(el('span', 'sp-meta', `${countLabel(items)} · ${doneN} done`));
+    if (sprint.state === 'active' && sprint.added) head.appendChild(el('span', 'sp-meta sp-added-count', `${sprint.added} added mid-sprint`));
     const left = dayNumber(sprint.end_date) - dayNumber(state.today);
     if (sprint.state === 'active') {
       if (left < 0) head.appendChild(el('span', 'sp-meta sp-overdue', `ended ${-left} day${left === -1 ? '' : 's'} ago`));
@@ -217,6 +219,11 @@ function cardRow(card, closed) {
   li.dataset.id = card.id;
   li.style.setProperty('--card-color', readableOnDark(card.color || '#999', 3));
   li.append(el('span', 'sp-card-title', card.title));
+  if (card.added_after_start) {
+    const badge = el('span', 'sp-pill sp-added', '+ added mid-sprint');
+    badge.title = 'Added to this sprint after it started' + (card.added_to_sprint_at ? ' (' + card.added_to_sprint_at + ')' : '');
+    li.appendChild(badge);
+  }
   if (card.project) li.appendChild(el('span', 'sp-pill', card.project));
   if (card.assignee) li.appendChild(el('span', 'sp-assignee', card.assignee));
   const col = state.columns[card.column];
