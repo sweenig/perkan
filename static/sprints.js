@@ -132,7 +132,7 @@ function renderProjectFilters() {
     b.dataset.project = name;
     b.setAttribute('aria-pressed', state.project === name ? 'true' : 'false');
     const dot = el('span', 'project-filter-pill-dot');
-    dot.style.backgroundColor = safeColor(colors[name]);
+    dot.style.backgroundColor = readableOnDark(safeColor(colors[name]), 3);
     b.append(dot, el('span', 'project-filter-pill-label', `${name} (${counts.get(name)})`));
     b.addEventListener('click', () => { state.project = state.project === name ? null : name; render(); });
     box.appendChild(b);
@@ -215,7 +215,7 @@ function listFor(box, items, sprintId, closed) {
 function cardRow(card, closed) {
   const li = el('li', 'sp-card' + (isDone(card) ? ' sp-done' : ''));
   li.dataset.id = card.id;
-  li.style.setProperty('--card-color', card.color || '#999');
+  li.style.setProperty('--card-color', readableOnDark(card.color || '#999', 3));
   li.append(el('span', 'sp-card-title', card.title));
   if (card.project) li.appendChild(el('span', 'sp-pill', card.project));
   if (card.assignee) li.appendChild(el('span', 'sp-assignee', card.assignee));
@@ -223,6 +223,7 @@ function cardRow(card, closed) {
   if (col) {
     const pill = el('span', 'sp-pill sp-status', col.title);
     pill.style.background = col.color || '#888';
+    pill.style.color = pillTextColor(col.color || '#888');
     li.appendChild(pill);
   }
   if (!closed) {

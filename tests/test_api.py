@@ -691,5 +691,17 @@ class SprintMigrationTests(Base):
                 db.migrate_to_sprints(conn)                            # refuses to run twice
 
 
+class PageTests(Base):
+    def test_pages_render_and_settings_is_a_page_not_a_modal(self):
+        for url in ('/', '/list', '/sprints', '/settings'):
+            r = self.c.get(url)
+            self.assertEqual(r.status_code, 200, url)
+            self.assertIn(b'href="/settings"', r.data if url != '/settings' else b'href="/settings"')
+        page = self.c.get('/settings').data
+        self.assertIn(b'settings.js', page)
+        self.assertIn(b'data-tab="projects"', page)
+        self.assertNotIn(b'settingsModal', self.c.get('/static/app.js').data)
+
+
 if __name__ == '__main__':
     unittest.main()
