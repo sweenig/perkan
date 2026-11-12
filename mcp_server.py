@@ -41,6 +41,13 @@ _LINKS = {
     'items': _obj({'text': _STR, 'url': _STR}, ['url']),
 }
 
+_PROJECT_FIELDS = {
+    'repo_path': dict(_STR, description='Local checkout where the project\'s work lives, e.g. /home/me/perkan.'),
+    'repo_url': dict(_STR, description='Remote repository URL.'),
+    'notes': dict(_STR, description='Free text about the project (test and deploy hints, portal, customer).'),
+    'links': dict(_LINKS, description='Links for the project, e.g. a Confluence page or portal URL.'),
+}
+
 
 # ---------------------------------------------------------------------------
 # Tool implementations. Each returns (status_code, json_payload).
@@ -307,14 +314,18 @@ TOOLS = [
     ('get_card_sprint_history', "A card's sprint changes, oldest first (from/to sprint ids, UTC time, source), "
                                 "plus its current sprint.", _obj({'id': _STR}, ['id']),
      _tool_get_card_sprint_history),
-    ('list_projects', 'List projects (name, color) in order.', _obj({}), _tool_list_projects),
-    ('create_project', 'Create a project. A color is generated if omitted.',
-     _obj({'name': _STR, 'color': _STR, 'position': {'type': 'integer'}}, ['name']),
+    ('list_projects', 'List projects alphabetically: name, color and, when set, repo_path, repo_url, notes and links.',
+     _obj({}), _tool_list_projects),
+    ('create_project', 'Create a project. A color is generated if omitted. repo_path, repo_url, notes and links '
+                       'say where the project\'s work lives.',
+     _obj(dict({'name': _STR, 'color': _STR}, **_PROJECT_FIELDS), ['name']),
      _tool_create_project),
-    ('update_project', 'Rename, recolor, or reposition a project (identified by its current name). '
-                       'Cards in the project are updated to match.',
-     _obj({'current_name': _STR, 'name': dict(_STR, description='New name.'), 'color': _STR,
-           'position': {'type': 'integer'}}, ['current_name']),
+    ('update_project', 'Rename, recolor or describe a project (identified by its current name). '
+                       'Cards in the project are updated to match. Pass an empty string (or an empty links list) '
+                       'to clear repo_path, repo_url, notes or links; fields you leave out are unchanged. '
+                       'links replaces the whole list.',
+     _obj(dict({'current_name': _STR, 'name': dict(_STR, description='New name.'), 'color': _STR},
+               **_PROJECT_FIELDS), ['current_name']),
      _tool_update_project),
     ('delete_project', 'Delete a project by name. Its cards are kept but un-assigned from the project.',
      _obj({'name': _STR}, ['name']), _tool_delete_project),

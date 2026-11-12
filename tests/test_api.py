@@ -797,6 +797,116 @@ class SprintMigrationTests(Base):
                 db.migrate_to_sprints(conn)                            # refuses to run twice
 
 
+class ProjectFieldTests(Base):
+    def call(self, tool, **arguments):
+        r = self.c.post('/mcp', json={'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+                                       'params': {'name': tool, 'arguments': arguments}})
+        result = r.get_json()['result']
+        self.assertFalse(result['isError'], result)
+        return result.get('structuredContent')
+
+    def test_project_without_fields_shows_only_name_and_color(self):
+        self.c.post('/api/project', json={'name': 'Plain', 'color': '#111111'})
+        self.assertEqual(self.get('/api/projects')['projects'], [{'name': 'Plain', 'color': '#111111'}])
+
+    def test_create_update_and_clear_fields(self):
+        r = self.c.post('/api/project', json={'name': 'P', 'color': '#222222', 'repo_path': ' /src/p ',
+                                              'links': [{'text': 'Docs', 'url': 'http://d'}, {'url': 'http://x'}, {'text': 'no url'}]})
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.get_json()['repo_path'], '/src/p')
+        self.assertEqual(r.get_json()['links'], [{'text': 'Docs', 'url': 'http://d'}, {'text': 'http://x', 'url': 'http://x'}])
+        # a partial update leaves the other fields alone
+        r = self.c.put('/api/project/0', json={'notes': 'run tests in a container', 'repo_url': 'https://g/p'})
+        proj = r.get_json()
+        self.assertEqual((proj['repo_path'], proj['repo_url'], proj['notes']), ('/src/p', 'https://g/p', 'run tests in a container'))
+        self.assertEqual(len(proj['links']), 2)
+        # shown by list_projects and get_board
+        self.assertEqual(self.get('/api/projects')['projects'][0], proj)
+        self.assertEqual(self.get('/api/board')['projects'][0], proj)
+        # empty values clear
+        proj = self.c.put('/api/project/0', json={'repo_path': '', 'links': []}).get_json()
+        self.assertNotIn('repo_path', proj)
+        self.assertNotIn('links', proj)
+        self.assertEqual(proj['notes'], 'run tests in a container')
+
+    def test_rename_and_recolor_keep_fields(self):
+        self.c.post('/api/project', json={'name': 'Old', 'repo_path': '/old'})
+        proj = self.c.put('/api/project/0', json={'name': 'New', 'color': '#333333'}).get_json()
+        self.assertEqual((proj['name'], proj['repo_path']), ('New', '/old'))
+
+    def test_export_import_round_trip_and_merge_never_blanks(self):
+        self.c.post('/api/project', json={'name': 'P', 'repo_path': '/p', 'notes': 'n', 'links': [{'url': 'http://l'}]})
+        exported = json.loads(self.c.get('/api/board/export').data)
+        self.assertEqual(exported['projects'][0]['repo_path'], '/p')
+        self.c.put('/api/project/0', json={'repo_path': '', 'notes': '', 'links': []})
+        r = self.c.post('/api/board/import', data={'mode': 'merge', 'file': (io.BytesIO(json.dumps(exported).encode()), 'f.json')},
+                        content_type='multipart/form-data')
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(self.get('/api/projects')['projects'][0]['repo_path'], '/p')
+        # an old export (no extras) merged over a project keeps what is there
+        old = {'columns': [], 'projects': [{'name': 'P', 'color': '#444444'}]}
+        self.c.post('/api/board/import', data={'mode': 'merge', 'file': (io.BytesIO(json.dumps(old).encode()), 'f.json')},
+                    content_type='multipart/form-data')
+        proj = self.get('/api/projects')['projects'][0]
+        self.assertEqual((proj['color'], proj['repo_path'], proj['notes']), ('#444444', '/p', 'n'))
+        # replace restores them from the export
+        self.c.put('/api/project/0', json={'repo_path': ''})
+        self.c.post('/api/board/import', data={'mode': 'replace', 'file': (io.BytesIO(json.dumps(exported).encode()), 'f.json')},
+                    content_type='multipart/form-data')
+        self.assertEqual(self.get('/api/projects')['projects'][0]['links'], [{'text': 'http://l', 'url': 'http://l'}])
+
+    def test_mcp_tools_carry_the_fields(self):
+        made = self.call('create_project', name='M', repo_path='/m', links=[{'text': 'T', 'url': 'http://t'}])
+        self.assertEqual(made['repo_path'], '/m')
+        upd = self.call('update_project', current_name='M', repo_url='https://g/m', notes='hello')
+        self.assertEqual((upd['repo_path'], upd['repo_url'], upd['notes']), ('/m', 'https://g/m', 'hello'))
+        listed = self.call('list_projects')['projects'][0]
+        self.assertEqual(listed['links'], [{'text': 'T', 'url': 'http://t'}])
+        self.assertEqual(self.call('get_board')['projects'][0]['repo_path'], '/m')
+        self.assertNotIn('notes', self.call('update_project', current_name='M', notes=''))
+        tools = {t['name']: t for t in self.c.post('/mcp', json={'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'}).get_json()['result']['tools']}
+        for name in ('create_project', 'update_project'):
+            self.assertTrue({'repo_path', 'repo_url', 'notes', 'links'} <= set(tools[name]['inputSchema']['properties']))
+
+    def test_projects_are_alphabetical_and_have_no_position(self):
+        for name in ('beta', 'Alpha', 'gamma', 'alpha2'):
+            self.c.post('/api/project', json={'name': name, 'position': 0})      # position is ignored
+        names = [p['name'] for p in self.get('/api/projects')['projects']]
+        self.assertEqual(names, ['Alpha', 'alpha2', 'beta', 'gamma'])
+        self.assertEqual([p['name'] for p in self.get('/api/board')['projects']], names)
+        self.c.put('/api/project/1', json={'name': 'zeta', 'position': 0})       # renamed: sorts to the end
+        self.assertEqual([p['name'] for p in self.get('/api/projects')['projects']], ['Alpha', 'beta', 'gamma', 'zeta'])
+        self.assertEqual(self.c.delete('/api/project/0').status_code, 200)      # index = alphabetical position
+        self.assertEqual([p['name'] for p in self.get('/api/projects')['projects']], ['beta', 'gamma', 'zeta'])
+        with db.read() as conn:
+            self.assertNotIn('position', [r['name'] for r in conn.execute('PRAGMA table_info(projects)')])
+        tools = {t['name']: t for t in self.c.post('/mcp', json={'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'}).get_json()['result']['tools']}
+        for name in ('create_project', 'update_project'):
+            self.assertNotIn('position', tools[name]['inputSchema']['properties'])
+
+    def test_v7_database_gains_the_columns(self):
+        import sqlite3
+        import subprocess
+        d = tempfile.mkdtemp(prefix='perkan-v7-')
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        prefix = "import os; os.environ['PERKAN_DATA_DIR']=%r; import sys; sys.path.insert(0,%r); import app, db, json\n" % (d, root)
+        subprocess.run([sys.executable, '-c', prefix + "app.app.test_client().post('/api/project', json={'name': 'Old'})"], check=True)
+        conn = sqlite3.connect(os.path.join(d, 'perkan.db'))
+        for col in ('repo_path', 'repo_url', 'notes', 'links'):
+            conn.execute('ALTER TABLE projects DROP COLUMN %s' % col)
+        conn.execute('ALTER TABLE projects ADD COLUMN position INTEGER NOT NULL DEFAULT 0')   # what v7 had
+        conn.execute('PRAGMA user_version = 7')
+        conn.commit()
+        conn.close()
+        out = subprocess.run([sys.executable, '-c', prefix + "c=app.app.test_client()\n"
+                              "c.put('/api/project/0', json={'repo_path': '/after'})\n"
+                              "print(json.dumps(c.get('/api/projects').get_json()['projects']))\n"
+                              "print(db._connect().execute('PRAGMA user_version').fetchone()[0])"],
+                             capture_output=True, text=True, check=True).stdout.split('\n')
+        self.assertEqual(json.loads(out[0])[0]['repo_path'], '/after')
+        self.assertEqual(out[1], str(db.SCHEMA_VERSION))
+
+
 class PageTests(Base):
     def test_pages_render_and_settings_is_a_page_not_a_modal(self):
         for url in ('/', '/list', '/sprints', '/settings'):
@@ -806,6 +916,8 @@ class PageTests(Base):
         page = self.c.get('/settings').data
         self.assertIn(b'settings.js', page)
         self.assertIn(b'data-tab="projects"', page)
+        self.assertIn(b'id="projectModal"', page)          # projects are added and edited in one modal
+        self.assertIn(b'colors.js', page)
         self.assertNotIn(b'settingsModal', self.c.get('/static/app.js').data)
 
 

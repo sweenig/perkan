@@ -47,6 +47,7 @@ Every MCP tool calls the matching `/api/*` route, so behavior is the same as the
 
 - Hidden columns (and their cards) are left out of `GET /api/board`, `/api/columns` and `/api/cards` unless `?include_hidden=true`. Export always includes everything.
 - `GET /api/cards` returns `{cards, total}`; filters are `column`, `project`, `assignee`, `sprint`, `query`, paged with `limit` and `offset`.
+- Projects can carry `repo_path`, `repo_url`, `notes` and `links` (Settings > Projects > Details, `/api/project`, MCP `create_project` / `update_project`). They are shown only when set. On update, a field you leave out is unchanged and an empty value clears it; `links` replaces the whole list. Merge-importing never blanks a project's fields.
 
 ## Tests
 

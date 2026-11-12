@@ -40,8 +40,6 @@
           <div class="settings-tab-panel" data-tab="projects">
             <div id="projectsList" class="projects-list"></div>
             <div class="add-project">
-              <input id="newProjectName" placeholder="New project name" />
-              <input id="newProjectColor" type="color" value="#5b2e8a" />
               <button id="addProjectBtn">Add Project</button>
             </div>
           </div>
@@ -87,6 +85,44 @@
       </div>
     </main>
 
+    <div id="projectModal" class="modal hidden">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content project-modal-content" role="dialog" aria-labelledby="projectModalTitle">
+        <h2 id="projectModalTitle">Edit project</h2>
+        <label>Name
+          <input id="projectName" placeholder="Project name" autocomplete="off" />
+        </label>
+        <label>Color
+          <input id="projectColor" type="color" value="#5b2e8a" />
+          <span class="hint">Colors the project's cards and its badge in lists. Changing it recolors every card in the project.</span>
+        </label>
+        <label>Repo path
+          <input id="projectRepoPath" placeholder="/home/me/repo" autocomplete="off" />
+          <span class="hint">Local checkout where this project's work lives. A session starting one of its cards works here.</span>
+        </label>
+        <label>Repo URL
+          <input id="projectRepoUrl" placeholder="https://github.com/org/repo" autocomplete="off" />
+          <span class="hint">Remote repository, if there is one.</span>
+        </label>
+        <label>Notes
+          <textarea id="projectNotes" rows="3"></textarea>
+          <span class="hint">Anything worth knowing before starting a card: how to test, which portal or customer, where to deploy.</span>
+        </label>
+        <label>Links
+          <textarea id="projectLinks" rows="3" placeholder="Confluence | https://example.com/page"></textarea>
+          <span class="hint">One per line, as <code>label | url</code> or just the URL.</span>
+        </label>
+        <div id="projectError" class="project-error" role="alert"></div>
+        <div class="modal-actions project-modal-actions">
+          <button type="button" id="projectDeleteBtn" class="project-delete">Delete project</button>
+          <span class="spacer"></span>
+          <button type="button" id="projectCancelBtn">Cancel</button>
+          <button type="button" id="projectSaveBtn">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="/static/colors.js"></script>
     <script src="/static/settings.js"></script>
   </body>
 </html>
