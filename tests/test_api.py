@@ -3,6 +3,7 @@
 Run from the perkan directory:  python -m unittest discover -s tests -v
 Uses a throwaway data directory; never touches ./data.
 """
+import datetime
 import io
 import json
 import os
@@ -895,6 +896,8 @@ class ProjectFieldTests(Base):
         for col in ('repo_path', 'repo_url', 'notes', 'links'):
             conn.execute('ALTER TABLE projects DROP COLUMN %s' % col)
         conn.execute('ALTER TABLE projects ADD COLUMN position INTEGER NOT NULL DEFAULT 0')   # what v7 had
+        conn.execute('ALTER TABLE columns DROP COLUMN stacked')                   # added in v10
+        conn.execute('ALTER TABLE columns DROP COLUMN counts_as_work')            # added in v12
         conn.execute('PRAGMA user_version = 7')
         conn.commit()
         conn.close()
@@ -904,6 +907,347 @@ class ProjectFieldTests(Base):
                               "print(db._connect().execute('PRAGMA user_version').fetchone()[0])"],
                              capture_output=True, text=True, check=True).stdout.split('\n')
         self.assertEqual(json.loads(out[0])[0]['repo_path'], '/after')
+        self.assertEqual(out[1], str(db.SCHEMA_VERSION))
+
+
+class BacklogAddCardTests(Base):
+    """The sprints page adds backlog cards at the top or bottom: sprint='backlog' plus, for the top,
+    an explicit order just below the first backlog card."""
+    def backlog_ids(self):
+        return [c['id'] for c in self.get('/api/cards?sprint=backlog')['cards']]
+
+    def test_new_card_goes_to_top_or_bottom_of_backlog(self):
+        before = self.backlog_ids()
+        first = self.get('/api/cards?sprint=backlog')['cards'][0]['order']
+        top = self.post(title='top', column='todo', sprint='backlog', order=first - 1, project='P', assignee='sam')
+        bottom = self.post(title='bottom', column='todo', sprint='backlog')
+        self.assertEqual(self.backlog_ids(), [top['id']] + before + [bottom['id']])
+        self.assertEqual((top['project'], top['assignee']), ('P', 'sam'))
+        self.assertIsNone(top.get('sprint'))
+        self.assert_invariants()
+
+
+class StackedColumnTests(Base):
+    def call(self, tool, **arguments):
+        r = self.c.post('/mcp', json={'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+                                       'params': {'name': tool, 'arguments': arguments}})
+        result = r.get_json()['result']
+        self.assertFalse(result['isError'], result)
+        return result.get('structuredContent')
+
+    def stacked(self, url='/api/columns'):
+        return {c['id']: c['stacked'] for c in self.get(url)['columns']}
+
+    def test_default_off_set_and_clear_without_moving_cards(self):
+        self.assertEqual(set(self.stacked().values()), {False})
+        before = self.global_ids()
+        r = self.c.put('/api/column/doing', json={'stacked': True})
+        self.assertTrue(r.get_json()['stacked'])
+        self.assertTrue(self.stacked()['doing'])
+        self.assertTrue(next(c for c in self.get('/api/board')['columns'] if c['id'] == 'doing')['stacked'])
+        self.c.put('/api/column/doing', json={'stacked': 'false'})     # clients send string booleans
+        self.assertFalse(self.stacked()['doing'])
+        self.assertEqual(self.global_ids(), before)
+        self.assertEqual(self.ids('doing'), ['d1', 'd2'])
+
+    def test_create_with_the_setting_and_through_mcp(self):
+        r = self.c.post('/api/column', json={'title': 'Parked', 'stacked': True})
+        self.assertTrue(r.get_json()['stacked'])
+        self.assertTrue(self.stacked()['parked'])
+        made = self.call('create_column', title='Waiting', stacked='true')
+        self.assertEqual(self.call('list_columns')['columns'][-1]['stacked'], True)
+        self.call('update_column', id=made['id'], stacked=False)
+        self.assertFalse(self.stacked()[made['id']])
+        tools = {t['name']: t for t in self.c.post('/mcp', json={'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'}).get_json()['result']['tools']}
+        for name in ('create_column', 'update_column'):
+            self.assertIn('stacked', tools[name]['inputSchema']['properties'])
+
+    def test_setting_survives_export_import_and_hidden_columns_keep_it(self):
+        self.c.put('/api/column/doing', json={'stacked': True})
+        self.c.put('/api/column/archive', json={'stacked': True})
+        exported = json.loads(self.c.get('/api/board/export').data)
+        self.c.put('/api/column/doing', json={'stacked': False})
+        r = self.c.post('/api/board/import', data={'mode': 'replace', 'file': (io.BytesIO(json.dumps(exported).encode()), 'f.json')},
+                        content_type='multipart/form-data')
+        self.assertEqual(r.status_code, 200, r.data)
+        got = self.stacked('/api/columns?include_hidden=true')
+        self.assertTrue(got['doing'] and got['archive'] and not got['todo'])
+
+    def test_v9_database_gains_the_column(self):
+        import sqlite3
+        import subprocess
+        d = tempfile.mkdtemp(prefix='perkan-v9-')
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        prefix = "import os; os.environ['PERKAN_DATA_DIR']=%r; import sys; sys.path.insert(0,%r); import app, db, json\n" % (d, root)
+        subprocess.run([sys.executable, '-c', prefix + "pass"], check=True)
+        conn = sqlite3.connect(os.path.join(d, 'perkan.db'))
+        conn.execute('ALTER TABLE columns DROP COLUMN stacked')
+        conn.execute('ALTER TABLE columns DROP COLUMN counts_as_work')
+        conn.execute('PRAGMA user_version = 9')
+        conn.commit()
+        conn.close()
+        out = subprocess.run([sys.executable, '-c', prefix + "c=app.app.test_client()\n"
+                              "c.put('/api/column/inprogress', json={'stacked': True})\n"
+                              "print(json.dumps({x['id']: x['stacked'] for x in c.get('/api/columns').get_json()['columns']}))\n"
+                              "print(db._connect().execute('PRAGMA user_version').fetchone()[0])"],
+                             capture_output=True, text=True, check=True).stdout.split('\n')
+        self.assertEqual(json.loads(out[0]), {'todo': False, 'inprogress': True, 'blocked': False, 'done': False})
+        self.assertEqual(out[1], str(db.SCHEMA_VERSION))
+
+    def test_v10_database_renames_the_column(self):
+        import sqlite3
+        import subprocess
+        d = tempfile.mkdtemp(prefix='perkan-v10-')
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        prefix = "import os; os.environ['PERKAN_DATA_DIR']=%r; import sys; sys.path.insert(0,%r); import app, db, json\n" % (d, root)
+        subprocess.run([sys.executable, '-c', prefix + "app.app.test_client().put('/api/column/inprogress', json={'stacked': True})"], check=True)
+        conn = sqlite3.connect(os.path.join(d, 'perkan.db'))
+        conn.execute('ALTER TABLE columns RENAME COLUMN stacked TO stack_with_previous')    # what v10 called it
+        conn.execute('ALTER TABLE columns DROP COLUMN counts_as_work')
+        conn.execute('PRAGMA user_version = 10')
+        conn.commit()
+        conn.close()
+        out = subprocess.run([sys.executable, '-c', prefix + "c=app.app.test_client()\n"
+                              "print(json.dumps({x['id']: x['stacked'] for x in c.get('/api/columns').get_json()['columns']}))\n"
+                              "print(db._connect().execute('PRAGMA user_version').fetchone()[0])"],
+                             capture_output=True, text=True, check=True).stdout.split('\n')
+        self.assertEqual(json.loads(out[0]), {'todo': False, 'inprogress': True, 'blocked': False, 'done': False})   # kept
+        self.assertEqual(out[1], str(db.SCHEMA_VERSION))
+
+    def test_board_and_settings_pages_wire_the_stack(self):
+        js = self.c.get('/static/app.js').data
+        self.assertIn(b'column-stack', js)
+        self.assertIn(b'stacked', js)
+        self.assertIn(b'lastStacked', js)               # neighbouring stacked columns share a slot
+        self.assertIn(b'.column-stack', self.c.get('/static/style.css').data)
+        self.assertIn(b'col-stack', self.c.get('/static/settings.js').data)
+
+
+class BurnupTests(Base):
+    """Cumulative minutes spent per day, checked against a hand calculation (times are UTC; PERKAN_TZ is unset).
+
+    Sprint S: 2026-11-02 .. 2026-11-06, "now" = 2026-11-04 12:00. Only the column 'doing' counts as work.
+      A  in S from 11-01. doing 11-02 09:00-12:00 (180), back in doing 11-03 10:00 until now (1560)  -> 1740
+      B  in S, sits in 'archive' (waiting, not work) since 11-02 09:00                                -> 0
+      C  carried over: in doing since 11-02 20:00, joined S 11-03 08:00 -> counted from 08:00 (1680)  -> 1680
+      D  only a backfill history row                                                                  -> unknown
+      E  in S, no sprint history at all; doing 11-02 12:00-18:00, then done                           -> 360, flagged
+      F  in S 11-02 00:00 to 11-03 00:00 (then moved to another sprint), doing since 11-02 12:00      -> 720 (12h)
+    Cumulative at the end of 11-02 (11-03 00:00): A 180, C 0, E 360, F 720            -> 1260
+    Cumulative at the end of 11-03 (11-04 00:00): A 1020, C 960, E 360, F 720          -> 3060
+    Now (11-04 12:00):                            A 1740, C 1680, E 360, F 720         -> 4500
+    """
+    NOW = datetime.datetime(2026, 11, 4, 12, 0, tzinfo=datetime.timezone.utc)
+
+    def make(self, title):
+        return self.post(title=title, column='todo')['id']
+
+    def history(self, cid, rows):
+        """rows: [(column, 'YYYY-MM-DD HH:MM', source)] replaces the card's column history."""
+        with db.write() as conn:
+            conn.execute('DELETE FROM card_history WHERE card_id = ?', (cid,))
+            prev = None
+            for col, at, source in rows:
+                conn.execute('INSERT INTO card_history (card_id, from_column, to_column, at, source) VALUES (?,?,?,?,?)',
+                             (cid, prev, col, at.replace(' ', 'T') + ':00Z', source))
+                prev = col
+
+    def in_sprint(self, cid, sid, entered=None, left=None, other=None):
+        with db.write() as conn:
+            conn.execute('DELETE FROM card_sprint_history WHERE card_id = ?', (cid,))
+            if entered:
+                conn.execute('INSERT INTO card_sprint_history (card_id, from_sprint, to_sprint, at, source) VALUES (?,?,?,?,?)',
+                             (cid, None, sid, entered.replace(' ', 'T') + ':00Z', 'api'))
+            if left:
+                conn.execute('INSERT INTO card_sprint_history (card_id, from_sprint, to_sprint, at, source) VALUES (?,?,?,?,?)',
+                             (cid, sid, other, left.replace(' ', 'T') + ':00Z', 'api'))
+            conn.execute('UPDATE cards SET sprint_id = ? WHERE id = ?', (other if left else sid, cid))
+
+    def setUp(self):
+        super().setUp()
+        self.c.put('/api/column/doing', json={'counts_as_work': True})
+        with db.write() as conn:
+            self.sid = db.create_sprint(conn, '2026-11-06', name='S', start_date='2026-11-02')
+            db.start_sprint(conn, self.sid, start_date='2026-11-02')
+            self.other = db.create_sprint(conn, '2026-11-13', name='Next')
+        ids = {n: self.make(n) for n in 'ABCDEF'}
+        self.ids = ids
+        P = 'api'
+        self.history(ids['A'], [('todo', '2026-11-01 08:00', P), ('doing', '2026-11-02 09:00', P),
+                                ('todo', '2026-11-02 12:00', P), ('doing', '2026-11-03 10:00', P)])
+        self.in_sprint(ids['A'], self.sid, entered='2026-11-01 08:00')
+        self.history(ids['B'], [('todo', '2026-11-01 08:00', P), ('archive', '2026-11-02 09:00', P)])
+        self.in_sprint(ids['B'], self.sid, entered='2026-11-01 08:00')
+        self.history(ids['C'], [('todo', '2026-11-01 08:00', P), ('doing', '2026-11-02 20:00', P)])
+        self.in_sprint(ids['C'], self.sid, entered='2026-11-03 08:00')
+        self.history(ids['D'], [('done', '2026-10-30 00:00', 'backfill')])
+        self.in_sprint(ids['D'], self.sid, entered='2026-11-01 08:00')
+        self.history(ids['E'], [('todo', '2026-11-01 08:00', P), ('doing', '2026-11-02 12:00', P), ('done', '2026-11-02 18:00', P)])
+        self.in_sprint(ids['E'], self.sid)                      # no sprint history row at all
+        with db.write() as conn:
+            conn.execute('UPDATE cards SET sprint_id = ? WHERE id = ?', (self.sid, ids['E']))
+        self.history(ids['F'], [('todo', '2026-11-01 08:00', P), ('doing', '2026-11-02 12:00', P)])
+        self.in_sprint(ids['F'], self.sid, entered='2026-11-02 00:00', left='2026-11-03 00:00', other=self.other)
+
+    def burnup(self):
+        with db.read() as conn:
+            return db.sprint_burnup(conn, self.sid, now=self.NOW)
+
+    def test_points_match_the_hand_calculation(self):
+        out = self.burnup()
+        self.assertEqual(out['days'], ['2026-11-02', '2026-11-03', '2026-11-04', '2026-11-05', '2026-11-06'])
+        self.assertEqual([(p['kind'], p['minutes']) for p in out['points']],
+                         [('start', 0), ('day_end', 180 + 360 + 720),
+                          ('day_end', (180 + 840) + 960 + 360 + 720),
+                          ('now', 1740 + 1680 + 360 + 720)])
+        self.assertEqual(out['points'][-1]['at'], '2026-11-04T12:00:00Z')      # future days are not plotted
+        self.assertEqual(out['total_minutes'], 4500)
+        self.assertEqual([w['id'] for w in out['work_columns']], ['doing'])
+
+    def test_hourly_points_match_the_hand_calculation(self):
+        with db.read() as conn:
+            out = db.sprint_burnup(conn, self.sid, now=self.NOW, step='hour')
+        pts = out['points']
+        self.assertEqual(out['step'], 'hour')
+        self.assertEqual(len(pts), 1 + 59 + 1)          # origin, 11-02 01:00 .. 11-04 11:00, and now
+        by_at = {p['at']: p for p in pts}
+        self.assertEqual(pts[0]['minutes'], 0)
+        self.assertEqual(by_at['2026-11-02T08:00:00Z']['minutes'], 0)
+        self.assertEqual(by_at['2026-11-02T12:00:00Z']['minutes'], 180)                   # A's first stay, ended 12:00
+        self.assertEqual(by_at['2026-11-02T18:00:00Z']['minutes'], 180 + 360 + 360)       # + E 12-18, F 12-18
+        self.assertEqual(by_at['2026-11-03T00:00:00Z']['minutes'], 1260)                  # = the daily point
+        self.assertEqual(by_at['2026-11-03T09:00:00Z']['minutes'], 1260 + 60)             # C joins at 08:00: one hour
+        self.assertEqual(by_at['2026-11-04T00:00:00Z']['minutes'], 3060)                  # = the daily point
+        self.assertEqual((pts[-1]['kind'], pts[-1]['minutes']), ('now', 4500))
+        mins = [p['minutes'] for p in pts]
+        self.assertEqual(mins, sorted(mins))                                              # cumulative: never falls
+        self.assertEqual(pts[1]['local'], '2026-11-02T01:00')
+        self.assertEqual(out['tz'], 'UTC')
+        self.assertEqual(out['day_edges'][0], '2026-11-02T00:00:00Z')
+        self.assertEqual(len(out['day_edges']), 6)
+
+    def test_hourly_points_follow_the_local_time_zone(self):
+        os.environ['PERKAN_TZ'] = 'America/Denver'
+        try:
+            with db.read() as conn:
+                out = db.sprint_burnup(conn, self.sid, now=self.NOW, step='hour')
+        finally:
+            del os.environ['PERKAN_TZ']
+        self.assertEqual(out['tz'], 'America/Denver')
+        self.assertEqual(out['points'][0]['at'], '2026-11-02T07:00:00Z')      # 11-02 00:00 local (MST, UTC-7: DST ended 11-01)
+        self.assertEqual(out['points'][0]['local'], '2026-11-02T00:00')
+
+    def test_per_card_minutes_unknown_cards_and_flags(self):
+        out = self.burnup()
+        mins = {c['title']: c['minutes'] for c in out['cards']}
+        self.assertEqual(mins, {'A': 1740, 'C': 1680, 'E': 360, 'F': 720, 'B': 0})   # waiting time is not work
+        self.assertEqual([c['title'] for c in out['cards']][:2], ['A', 'C'])           # biggest first
+        self.assertEqual([u['title'] for u in out['unknown']], ['D'])                  # unknown, never 0
+        e = next(c for c in out['cards'] if c['title'] == 'E')
+        self.assertIn('no sprint history', e['note'])
+
+    def test_no_work_column_and_unstarted_sprint_say_so(self):
+        self.c.put('/api/column/doing', json={'counts_as_work': False})
+        out = self.burnup()
+        self.assertEqual(out['total_minutes'], 0)
+        self.assertTrue(any('Counts as work' in n for n in out['notes']))
+        with db.read() as conn:
+            planned = db.sprint_burnup(conn, self.other, now=self.NOW)
+        self.assertEqual(planned['points'], [])
+        self.assertTrue(planned['notes'])
+
+    def test_closed_sprint_stops_at_its_close_and_window_end(self):
+        with db.write() as conn:
+            conn.execute("UPDATE sprints SET state = 'closed', closed_at = '2026-11-03T12:00:00Z' WHERE id = ?", (self.sid,))
+        with db.read() as conn:
+            out = db.sprint_burnup(conn, self.sid, now=self.NOW)
+        self.assertEqual(out['points'][-1]['kind'], 'closed')
+        self.assertEqual(out['points'][-1]['at'], '2026-11-03T12:00:00Z')
+        # A: 180 + 2h (10:00-12:00 on 11-03), C: 4h (08:00-12:00), E 360, F 720
+        self.assertEqual(out['total_minutes'], 180 + 120 + 240 + 360 + 720)
+
+    def test_time_zone_moves_the_day_boundaries(self):
+        os.environ['PERKAN_TZ'] = 'America/Denver'          # UTC-7 in November: days end at 07:00 UTC
+        try:
+            out = self.burnup()
+        finally:
+            del os.environ['PERKAN_TZ']
+        self.assertEqual(out['points'][1]['at'], '2026-11-03T07:00:00Z')
+
+    def test_api_page_and_links(self):
+        out = self.get(f'/api/sprint/{self.sid}/burnup')
+        self.assertEqual(out['sprint']['name'], 'S')
+        self.assertEqual(self.get('/api/sprint/active/burnup')['sprint']['id'], self.sid)
+        self.assertEqual(self.c.get('/api/sprint/nope/burnup').status_code, 404)
+        self.assertEqual(self.c.get(f'/api/sprint/{self.sid}/burnup?step=week').status_code, 400)
+        self.assertEqual(self.get(f'/api/sprint/{self.sid}/burnup?step=hour')['step'], 'hour')
+        with db.write() as conn:
+            conn.execute("UPDATE sprints SET state = 'closed' WHERE id = ?", (self.sid,))
+        r = self.c.get('/api/sprint/active/burnup')
+        self.assertEqual(r.status_code, 404)
+        self.assertIn('no active sprint', r.get_json()['error'])
+        page = self.c.get('/burnup')
+        self.assertEqual(page.status_code, 200)
+        for needle in (b'id="buChart"', b'burnup.js', b'burnup.css', b'<select id="buTitle"', b'id="buSteps"'):
+            self.assertIn(needle, page.data)
+        for url in ('/', '/list', '/sprints', '/settings', '/burnup'):
+            self.assertIn(b'href="/burnup"' if url != '/burnup' else b'Burn-up', self.c.get(url).data, url)
+        self.assertIn(b'/api/sprint/', self.c.get('/static/burnup.js').data)
+
+
+class WorkColumnTests(Base):
+    def call(self, tool, **arguments):
+        r = self.c.post('/mcp', json={'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+                                       'params': {'name': tool, 'arguments': arguments}})
+        result = r.get_json()['result']
+        self.assertFalse(result['isError'], result)
+        return result.get('structuredContent')
+
+    def flags(self, url='/api/columns'):
+        return {c['id']: c['counts_as_work'] for c in self.get(url)['columns']}
+
+    def test_default_off_set_clear_create_mcp_and_export(self):
+        self.assertEqual(set(self.flags().values()), {False})
+        self.assertTrue(self.c.put('/api/column/doing', json={'counts_as_work': True}).get_json()['counts_as_work'])
+        self.assertTrue(self.flags()['doing'])
+        self.c.put('/api/column/doing', json={'counts_as_work': 'false'})
+        self.assertFalse(self.flags()['doing'])
+        self.assertTrue(self.c.post('/api/column', json={'title': 'Working', 'counts_as_work': True}).get_json()['counts_as_work'])
+        made = self.call('create_column', title='Reviewing', counts_as_work='true')
+        self.assertTrue(self.flags()[made['id']])
+        self.call('update_column', id=made['id'], counts_as_work=False)
+        self.assertFalse(self.flags()[made['id']])
+        self.assertIn('counts_as_work', self.call('list_columns')['columns'][0])
+        tools = {t['name']: t for t in self.c.post('/mcp', json={'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'}).get_json()['result']['tools']}
+        for name in ('create_column', 'update_column'):
+            self.assertIn('counts_as_work', tools[name]['inputSchema']['properties'])
+        self.c.put('/api/column/doing', json={'counts_as_work': True})
+        exported = json.loads(self.c.get('/api/board/export').data)
+        self.c.put('/api/column/doing', json={'counts_as_work': False})
+        r = self.c.post('/api/board/import', data={'mode': 'replace', 'file': (io.BytesIO(json.dumps(exported).encode()), 'f.json')},
+                        content_type='multipart/form-data')
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertTrue(self.flags()['doing'])
+        self.assertIn(b'col-work', self.c.get('/static/settings.js').data)
+
+    def test_v11_database_gains_the_column(self):
+        import sqlite3
+        import subprocess
+        d = tempfile.mkdtemp(prefix='perkan-v11-')
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        prefix = "import os; os.environ['PERKAN_DATA_DIR']=%r; import sys; sys.path.insert(0,%r); import app, db, json\n" % (d, root)
+        subprocess.run([sys.executable, '-c', prefix + "pass"], check=True)
+        conn = sqlite3.connect(os.path.join(d, 'perkan.db'))
+        conn.execute('ALTER TABLE columns DROP COLUMN counts_as_work')
+        conn.execute('PRAGMA user_version = 11')
+        conn.commit()
+        conn.close()
+        out = subprocess.run([sys.executable, '-c', prefix + "c=app.app.test_client()\n"
+                              "c.put('/api/column/inprogress', json={'counts_as_work': True})\n"
+                              "print(json.dumps({x['id']: x['counts_as_work'] for x in c.get('/api/columns').get_json()['columns']}))\n"
+                              "print(db._connect().execute('PRAGMA user_version').fetchone()[0])"],
+                             capture_output=True, text=True, check=True).stdout.split('\n')
+        self.assertEqual(json.loads(out[0]), {'todo': False, 'inprogress': True, 'blocked': False, 'done': False})
         self.assertEqual(out[1], str(db.SCHEMA_VERSION))
 
 
@@ -919,6 +1263,21 @@ class PageTests(Base):
         self.assertIn(b'id="projectModal"', page)          # projects are added and edited in one modal
         self.assertIn(b'colors.js', page)
         self.assertNotIn(b'settingsModal', self.c.get('/static/app.js').data)
+
+    def test_board_has_per_card_expand_toggle_and_header_icon(self):
+        js = self.c.get('/static/app.js').data
+        for needle in (b'class="card-toggle"', b'flippedCards', b'flippedCards.clear()', b'setTruncateBtnLabel'):
+            self.assertIn(needle, js)
+        self.assertIn(b'.card-toggle', self.c.get('/static/style.css').data)
+        self.assertIn(b'id="truncateBtn"', self.c.get('/').data)
+
+    def test_sprints_page_has_the_backlog_add_card_dialog(self):
+        page = self.c.get('/sprints').data
+        for ident in (b'id="cardDialog"', b'id="ncTitle"', b'id="ncProject"', b'id="ncAssignee"', b'id="ncDescription"'):
+            self.assertIn(ident, page)
+        js = self.c.get('/static/sprints.js').data
+        self.assertIn(b"openCardDialog('top')", js)
+        self.assertIn(b"openCardDialog('bottom')", js)
 
 
 if __name__ == '__main__':

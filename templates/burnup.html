@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Burn-up - Personal Kanban</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/burnup.css">
+    <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+  </head>
+  <body class="burnup-page">
+    <header>
+      <div class="header-top">
+        <div class="view-switcher">
+          <a href="/" class="view-link">🎯 Board</a>
+          <a href="/list" class="view-link">📋 List</a>
+          <a href="/sprints" class="view-link">🏃 Sprints</a>
+          <span class="view-link active">📈 Burn-up</span>
+        </div>
+        <div class="project-filters"></div>
+        <a id="settingsBtn" href="/settings" class="view-link" title="Board settings">⚙️ Settings</a>
+      </div>
+    </header>
+    <main class="bu-main">
+      <section class="bu-card">
+        <div class="bu-head">
+          <div>
+            <h1 class="bu-title"><select id="buTitle" class="bu-select" aria-label="Sprint"></select></h1>
+            <p id="buSub" class="bu-sub"></p>
+          </div>
+          <div class="bu-total" id="buTotal" hidden>
+            <span class="bu-total-value" id="buTotalValue"></span>
+            <span class="bu-total-label">spent in the sprint so far</span>
+          </div>
+        </div>
+        <div id="buNotes"></div>
+        <div id="buChartWrap" class="bu-chart-wrap" hidden>
+          <svg id="buChart" class="bu-chart" viewBox="0 0 900 360" role="img" tabindex="0" aria-label="Cumulative minutes spent over the sprint. Use the left and right arrow keys to read values." preserveAspectRatio="xMidYMid meet"></svg>
+          <div id="buTip" class="bu-tip" hidden></div>
+        </div>
+        <p id="buDesc" class="bu-desc" hidden></p>
+        <div class="bu-actions">
+          <div class="bu-seg" id="buSteps" role="group" aria-label="Resolution" hidden>
+            <button type="button" id="buStepHour" class="bu-btn" data-step="hour" aria-pressed="true">Hourly</button>
+            <button type="button" id="buStepDay" class="bu-btn" data-step="day" aria-pressed="false">Daily</button>
+          </div>
+          <button type="button" id="buTableBtn" class="bu-btn" aria-pressed="false" hidden>Show as table</button>
+        </div>
+        <div id="buDayTable" hidden></div>
+      </section>
+      <section class="bu-card" id="buCardsSection" hidden>
+        <h2>Time per card</h2>
+        <div id="buCards"></div>
+        <div id="buUnknown"></div>
+      </section>
+    </main>
+    <script src="/static/burnup.js"></script>
+  </body>
+</html>

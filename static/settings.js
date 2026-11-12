@@ -23,6 +23,14 @@ async function renderStatusSettings(){
         <input class="col-hidden" type="checkbox" data-id="${col.id}" ${col.hidden ? 'checked' : ''} />
         Hide
       </label>
+      <label class="col-hide-toggle" title="Stacked columns that sit next to each other share one slot on the board, top to bottom, each taking an equal share of its height (cards do not move)">
+        <input class="col-stack" type="checkbox" data-id="${col.id}" ${col.stacked ? 'checked' : ''} />
+        Stack
+      </label>
+      <label class="col-hide-toggle" title="Time cards spend in this column counts as time spent on the sprint burn-up (tick In Progress, not waiting columns)">
+        <input class="col-work" type="checkbox" data-id="${col.id}" ${col.counts_as_work ? 'checked' : ''} />
+        Counts as work
+      </label>
       <label class="col-hide-toggle" title="Cards moved into this column get a completion date">
         <input class="col-done" type="checkbox" data-id="${col.id}" ${col.is_done ? 'checked' : ''} />
         Done
@@ -61,6 +69,20 @@ async function renderStatusSettings(){
       const id = e.target.dataset.id;
       const is_done = e.target.checked;
       await fetch('/api/column/' + id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({is_done})});
+    });
+  });
+  document.querySelectorAll('.col-work').forEach(inp=>{
+    inp.addEventListener('change', async (e)=>{
+      const id = e.target.dataset.id;
+      const counts_as_work = e.target.checked;
+      await fetch('/api/column/' + id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({counts_as_work})});
+    });
+  });
+  document.querySelectorAll('.col-stack').forEach(inp=>{
+    inp.addEventListener('change', async (e)=>{
+      const id = e.target.dataset.id;
+      const stacked = e.target.checked;
+      await fetch('/api/column/' + id, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({stacked})});
     });
   });
   document.querySelectorAll('.col-current-done').forEach(inp=>{

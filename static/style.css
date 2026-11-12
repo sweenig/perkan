@@ -21,6 +21,9 @@ header{display:flex;flex-direction:column;gap:10px;padding:14px 20px;background:
 .board{display:flex;gap:12px;padding:20px;flex:1;align-items:stretch;overflow-x:auto;overflow-y:hidden;min-height:0}
 .column{background:#131320;border:1px solid #2a2a3a;border-radius:6px;padding:10px;flex:1;min-width:220px}
 .col-header{font-weight:600;margin-bottom:8px}
+/* stacked columns: one horizontal slot whose height is split equally between its columns */
+.column-stack{flex:1;min-width:220px;display:flex;flex-direction:column;gap:12px;overflow-y:auto;min-height:0}
+.column-stack>.column{flex:1 1 0;min-height:120px;height:auto}
 .card-list{min-height:40px}
 .column{border-radius:6px;position:relative;box-sizing:border-box}
 .column{display:flex;flex-direction:column;height:100%;min-height:0}
@@ -40,6 +43,9 @@ header{display:flex;flex-direction:column;gap:10px;padding:14px 20px;background:
 .card .card-assignee{font-size:13px;color:#b9d6f2;background:rgba(60,120,180,0.25);padding:2px 12px;border-radius:16px;font-weight:600;box-shadow:0 2px 6px rgba(0,0,0,0.3);white-space:nowrap;border:1px solid rgba(139,185,255,0.35)}
 .card .edit{border:0;background:transparent;cursor:pointer;font-size:16px;padding:2px 4px;opacity:0;transition:opacity 0.2s ease}
 .card:hover .edit{opacity:1}
+.card .card-toggle{border:0;background:transparent;color:inherit;cursor:pointer;padding:2px 4px;opacity:0;transition:opacity 0.2s ease;display:inline-flex;align-items:center}
+.card:hover .card-toggle,.card.card-flipped .card-toggle{opacity:1}
+#truncateBtn{display:inline-flex;align-items:center;gap:6px}
 .card-link-popup{position:absolute;z-index:40;min-width:220px;background:#0f0f18;color:#f4f6f8;border:1px solid rgba(255,255,255,0.18);border-radius:8px;padding:10px;box-shadow:0 12px 28px rgba(0,0,0,0.5);font-size:13px;line-height:1.4}
 .card-link-popup.hidden{display:none}
 .card-link-popup ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
