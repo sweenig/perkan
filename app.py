@@ -114,6 +114,8 @@ def _normalize_board(data):
         seen_current = seen_current or is_current
         normalized_columns.append({'id': col_id, 'title': title, 'color': color, 'hidden': hidden,
                                    'is_done': is_done or is_current, 'is_current_done': is_current,
+                                   'stacked': _truthy(col.get('stacked', False)),
+                                   'counts_as_work': _truthy(col.get('counts_as_work', False)),
                                    'cards': normalized_cards})
 
     _ensure_global_orders(normalized_columns)
@@ -329,6 +331,11 @@ def list_view():
 @app.route('/sprints')
 def sprints_view():
     return render_template('sprints.html')
+
+
+@app.route('/burnup')
+def burnup_view():
+    return render_template('burnup.html')
 
 
 @app.route('/settings')
@@ -621,13 +628,17 @@ def create_column():
     hidden = _truthy(data.get('hidden', False))
     is_current_done = _truthy(data.get('is_current_done', False))
     is_done = _truthy(data.get('is_done', False)) or is_current_done
+    stacked = _truthy(data.get('stacked', False))
+    counts_as_work = _truthy(data.get('counts_as_work', False))
     with db.write() as conn:
         ids = db.column_ids(conn)
         col_id = _slug(title)
         if col_id in ids:
             col_id = f"{col_id}-{str(uuid.uuid4())[:8]}"
-        conn.execute('INSERT INTO columns (id, title, color, hidden, position, is_done) VALUES (?,?,?,?,?,?)',
-                     (col_id, title, color, 1 if hidden else 0, len(ids), 1 if is_done else 0))
+        conn.execute('INSERT INTO columns (id, title, color, hidden, position, is_done, stacked, counts_as_work) '
+                     'VALUES (?,?,?,?,?,?,?,?)',
+                     (col_id, title, color, 1 if hidden else 0, len(ids), 1 if is_done else 0, 1 if stacked else 0,
+                      1 if counts_as_work else 0))
         if position is not None and position < len(ids):
             ids.insert(max(0, position), col_id)
         else:
@@ -636,7 +647,8 @@ def create_column():
         if is_current_done:
             db.set_current_done(conn, col_id)
     return jsonify({'id': col_id, 'title': title, 'cards': [], 'color': color, 'hidden': hidden,
-                    'is_done': is_done, 'is_current_done': is_current_done}), 201
+                    'is_done': is_done, 'is_current_done': is_current_done, 'stacked': stacked,
+                    'counts_as_work': counts_as_work}), 201
 
 
 @app.route('/api/column/<col_id>', methods=['PUT'])
@@ -648,6 +660,8 @@ def update_column(col_id):
     hidden = data.get('hidden')
     is_done = data.get('is_done')
     is_current_done = data.get('is_current_done')
+    stacked = data.get('stacked')
+    counts_as_work = data.get('counts_as_work')
     with db.write() as conn:
         ids = db.column_ids(conn)
         if col_id not in ids:
@@ -658,6 +672,12 @@ def update_column(col_id):
             conn.execute('UPDATE columns SET color = ? WHERE id = ?', (color, col_id))
         if hidden is not None:
             conn.execute('UPDATE columns SET hidden = ? WHERE id = ?', (1 if hidden else 0, col_id))
+        if counts_as_work is not None:
+            conn.execute('UPDATE columns SET counts_as_work = ? WHERE id = ?',
+                         (1 if _truthy(counts_as_work) else 0, col_id))
+        if stacked is not None:
+            conn.execute('UPDATE columns SET stacked = ? WHERE id = ?',
+                         (1 if _truthy(stacked) else 0, col_id))
         if is_done is not None:
             conn.execute('UPDATE columns SET is_done = ? WHERE id = ?', (1 if _truthy(is_done) else 0, col_id))
             if not _truthy(is_done):  # a column that is not a done column cannot be the current one
@@ -725,6 +745,21 @@ def get_sprint(sprint_id):
     if sprint is None:
         return jsonify({'error': 'sprint not found'}), 404
     return jsonify(sprint)
+
+
+@app.route('/api/sprint/<sprint_id>/burnup', methods=['GET'])
+def sprint_burnup(sprint_id):
+    """Cumulative minutes spent on a sprint's cards (sprint id, or "active"); ?step=day (default) or hour.
+    See db.sprint_burnup."""
+    with db.read() as conn:
+        if sprint_id == 'active':
+            sprint_id = db.active_sprint(conn)
+            if sprint_id is None:
+                return jsonify({'error': 'there is no active sprint'}), 404
+        try:
+            return jsonify(db.sprint_burnup(conn, sprint_id, step=request.args.get('step') or 'day'))
+        except db.SprintError as err:
+            return jsonify({'error': str(err)}), err.status
 
 
 @app.route('/api/sprint/<sprint_id>', methods=['PUT'])

@@ -25,7 +25,7 @@ DATA_DIR = os.environ.get('PERKAN_DATA_DIR') or os.path.join(os.path.dirname(__f
 DB_FILE = os.path.join(DATA_DIR, 'perkan.db')
 LEGACY_JSON = os.path.join(DATA_DIR, 'kanban.json')
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 12
 ORDER_STEP = 1_000_000.0
 MIN_GAP = 1e-3   # below this, neighbouring order values are renumbered to make room
 
@@ -37,7 +37,9 @@ CREATE TABLE IF NOT EXISTS columns (
     hidden   INTEGER NOT NULL DEFAULT 0,
     position INTEGER NOT NULL,
     is_done  INTEGER NOT NULL DEFAULT 0,
-    is_current_done INTEGER NOT NULL DEFAULT 0
+    is_current_done INTEGER NOT NULL DEFAULT 0,
+    stacked INTEGER NOT NULL DEFAULT 0,
+    counts_as_work INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS projects (
     name      TEXT PRIMARY KEY,
@@ -189,7 +191,8 @@ def load_board(conn, include_hidden=False, include_closed=False):
     for row in conn.execute(sql):
         col = {'id': row['id'], 'title': row['title'], 'color': row['color'],
                'hidden': bool(row['hidden']), 'is_done': bool(row['is_done']),
-               'is_current_done': bool(row['is_current_done']), 'cards': []}
+               'is_current_done': bool(row['is_current_done']),
+               'stacked': bool(row['stacked']), 'counts_as_work': bool(row['counts_as_work']), 'cards': []}
         columns.append(col)
         by_id[col['id']] = col
 
@@ -213,7 +216,8 @@ def load_board(conn, include_hidden=False, include_closed=False):
 def list_columns(conn, include_hidden=False):
     sql = 'SELECT * FROM columns' + ('' if include_hidden else ' WHERE hidden = 0') + ' ORDER BY position'
     return [{'id': r['id'], 'title': r['title'], 'color': r['color'], 'hidden': bool(r['hidden']),
-             'is_done': bool(r['is_done']), 'is_current_done': bool(r['is_current_done'])}
+             'is_done': bool(r['is_done']), 'is_current_done': bool(r['is_current_done']),
+             'stacked': bool(r['stacked']), 'counts_as_work': bool(r['counts_as_work'])}
             for r in conn.execute(sql)]
 
 
@@ -691,10 +695,11 @@ def replace_board(conn, board):
     conn.execute('DELETE FROM columns')
     conn.execute('DELETE FROM projects')
     for i, col in enumerate(board.get('columns', [])):
-        conn.execute('INSERT INTO columns (id, title, color, hidden, position, is_done, is_current_done) '
-                     'VALUES (?,?,?,?,?,?,?)',
+        conn.execute('INSERT INTO columns (id, title, color, hidden, position, is_done, is_current_done, '
+                     'stacked, counts_as_work) VALUES (?,?,?,?,?,?,?,?,?)',
                      (col['id'], col['title'], col['color'], 1 if col.get('hidden') else 0, i,
-                      1 if col.get('is_done') else 0, 1 if col.get('is_current_done') else 0))
+                      1 if col.get('is_done') else 0, 1 if col.get('is_current_done') else 0,
+                      1 if col.get('stacked') else 0, 1 if col.get('counts_as_work') else 0))
         for card in col.get('cards', []):
             if not card.get('created_at') and created.get(card['id']):
                 card = dict(card, created_at=created[card['id']])
@@ -789,6 +794,172 @@ def get_sprint(conn, sprint_id):
         return None
     added = mid_sprint_additions(conn, by_sprint=True).get(sprint_id, 0)
     return _sprint_dict(row, _sprint_counts(conn).get(sprint_id, (0, 0)), today(), added)
+
+
+# ---------------------------------------------------------------- burn-up
+
+NO_HISTORY_SOURCES = ('backfill', 'migration')   # history rows that were invented, not observed
+
+
+def _local_zone():
+    tz = os.environ.get('PERKAN_TZ')
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo(tz) if tz else timezone.utc
+    except Exception:
+        return timezone.utc
+
+
+def _parse_ts(value):
+    return datetime.strptime(value, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+
+
+def _iso(dt):
+    return dt.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def _midnight(d, zone):
+    """Start of local day `d` (a date) as a UTC datetime."""
+    return datetime(d.year, d.month, d.day, tzinfo=zone).astimezone(timezone.utc)
+
+
+def _overlap_minutes(segments, lo, hi):
+    """Minutes of the (start, end) datetime segments that fall inside [lo, hi]."""
+    total = 0.0
+    for a, b in segments:
+        start, end = max(a, lo), min(b, hi)
+        if end > start:
+            total += (end - start).total_seconds() / 60.0
+    return total
+
+
+def sprint_burnup(conn, sprint_id, now=None, step='day'):
+    """Cumulative minutes spent on a sprint's cards, per day, for the burn-up page.
+
+    Time spent = wall-clock time a card sat in a column marked counts_as_work, counted only while the card
+    was in this sprint (card_sprint_history) and inside the sprint's dates (the start of start_date to the
+    end of end_date, in PERKAN_TZ; a running sprint stops at `now`, a closed one at closed_at). Minutes are
+    summed across cards. Cards with no observed column history are returned as unknown, never as 0; cards in
+    the sprint with no sprint history count for the whole window and are flagged.
+
+    step is 'day' (a point at the end of every finished day) or 'hour' (a point every hour from the start
+    of the first day). Either way there is an origin point and, while the sprint runs, a last point at
+    `now`. Every point carries `local`, its wall-clock time in PERKAN_TZ; `day_edges` are the local
+    midnights (UTC) that bound each day, so a client can place points exactly.
+    """
+    if step not in ('day', 'hour'):
+        raise SprintError("step must be 'day' or 'hour'")
+    row = conn.execute('SELECT * FROM sprints WHERE id = ?', (sprint_id,)).fetchone()
+    if row is None:
+        raise SprintError('sprint not found', 404)
+    now = now or datetime.now(timezone.utc)
+    zone = _local_zone()
+    work_cols = [r['id'] for r in conn.execute('SELECT id FROM columns WHERE counts_as_work = 1 ORDER BY position')]
+    out = {'sprint': {'id': row['id'], 'name': row['name'], 'state': row['state'],
+                      'start_date': row['start_date'], 'end_date': row['end_date']},
+           'work_columns': [{'id': r['id'], 'title': r['title']} for r in conn.execute(
+               'SELECT id, title FROM columns WHERE counts_as_work = 1 ORDER BY position')],
+           'unit': 'minutes', 'step': step, 'tz': getattr(zone, 'key', 'UTC'), 'as_of': _iso(now),
+           'days': [], 'day_edges': [], 'points': [], 'total_minutes': 0,
+           'cards': [], 'unknown': [], 'notes': []}
+    if not row['start_date']:
+        out['notes'].append('This sprint has no start date yet (it starts when it is started).')
+        return out
+    start_d = datetime.strptime(row['start_date'], '%Y-%m-%d').date()
+    end_d = datetime.strptime(row['end_date'], '%Y-%m-%d').date()
+    n_days = (end_d - start_d).days + 1
+    days = [start_d + timedelta(days=i) for i in range(n_days)]
+    out['days'] = [d.isoformat() for d in days]
+    out['day_edges'] = [_iso(_midnight(start_d + timedelta(days=i), zone)) for i in range(n_days + 1)]
+    window_start = _midnight(start_d, zone)
+    window_end = _midnight(end_d + timedelta(days=1), zone)
+    stop = min(now, window_end)
+    if row['state'] == 'closed' and row['closed_at']:
+        stop = min(stop, _parse_ts(row['closed_at']))
+    if not work_cols:
+        out['notes'].append('No column is marked "Counts as work", so no time is counted. '
+                            'Tick it for In Progress (or other working columns) in Settings > Statuses.')
+
+    ids = [r['card_id'] for r in conn.execute('SELECT DISTINCT card_id FROM card_sprint_history WHERE to_sprint = ?', (sprint_id,))]
+    ids += [r['id'] for r in conn.execute('SELECT id FROM cards WHERE sprint_id = ?', (sprint_id,))]
+    seen, card_ids = set(), []
+    for cid in ids:
+        if cid not in seen:
+            seen.add(cid)
+            card_ids.append(cid)
+
+    all_segments = []      # (start, end) of counted time across all cards
+    for cid in card_ids:
+        card = conn.execute('SELECT title, sprint_id FROM cards WHERE id = ?', (cid,)).fetchone()
+        if card is None:
+            continue
+        # when was the card in this sprint?
+        member, open_since, entered = [], None, False
+        for r in conn.execute('SELECT from_sprint, to_sprint, at FROM card_sprint_history WHERE card_id = ? ORDER BY id', (cid,)):
+            if r['to_sprint'] == sprint_id:
+                open_since, entered = _parse_ts(r['at']), True
+            elif r['from_sprint'] == sprint_id:
+                member.append((open_since or window_start, _parse_ts(r['at'])))
+                open_since = None
+        if open_since is not None:
+            member.append((open_since, stop))
+        note = None
+        if not entered and card['sprint_id'] == sprint_id:
+            member, note = [(window_start, stop)], 'no sprint history: counted for the whole sprint'
+        # where was the card, and when?
+        hist = conn.execute('SELECT to_column, at, source FROM card_history WHERE card_id = ? ORDER BY id', (cid,)).fetchall()
+        if not any(h['source'] not in NO_HISTORY_SOURCES for h in hist):
+            out['unknown'].append({'id': cid, 'title': card['title'], 'reason': 'no recorded column history'})
+            continue
+        work = []
+        for i, h in enumerate(hist):
+            if h['to_column'] not in work_cols:
+                continue
+            begin = _parse_ts(h['at'])
+            end = _parse_ts(hist[i + 1]['at']) if i + 1 < len(hist) else now
+            work.append((begin, end))
+        # keep only the part of the card's working time that was inside the sprint
+        counted = []
+        for wa, wb in work:
+            for ma, mb in member:
+                a, b = max(wa, ma, window_start), min(wb, mb, stop)
+                if b > a:
+                    counted.append((a, b))
+        minutes = _overlap_minutes(counted, window_start, stop)
+        all_segments.extend(counted)
+        entry = {'id': cid, 'title': card['title'], 'minutes': round(minutes)}
+        if note:
+            entry['note'] = note
+        out['cards'].append(entry)
+
+    out['cards'].sort(key=lambda c: (-c['minutes'], c['title'].lower()))
+    # points: the origin, then the end of every finished day (or every hour), and a last point at the
+    # moment the data stops while that is inside the sprint ("now" for a running sprint)
+    def point(at, kind, day=None):
+        local = at.astimezone(zone)
+        return {'at': _iso(at), 'local': local.strftime('%Y-%m-%dT%H:%M'), 'day': day or local.strftime('%Y-%m-%d'),
+                'kind': kind, 'minutes': round(_overlap_minutes(all_segments, window_start, at))}
+
+    points = [point(window_start, 'start', days[0].isoformat())]
+    if step == 'day':
+        for d in days:
+            day_end = _midnight(d + timedelta(days=1), zone)
+            if day_end <= stop:
+                p = point(day_end, 'day_end', d.isoformat())      # labelled with the day it closes
+                points.append(p)
+            elif _midnight(d, zone) < stop:
+                points.append(point(stop, 'now' if row['state'] == 'active' else 'closed', d.isoformat()))
+                break
+    else:
+        t = window_start + timedelta(hours=1)
+        while t < stop:
+            points.append(point(t, 'hour'))
+            t += timedelta(hours=1)
+        if stop > window_start:
+            points.append(point(stop, 'end' if stop >= window_end else ('now' if row['state'] == 'active' else 'closed')))
+    out['points'] = points
+    out['total_minutes'] = points[-1]['minutes']
+    return out
 
 
 def active_sprint(conn):
@@ -1127,6 +1298,25 @@ def _migrate_8_to_9(conn):
     logger.info('Migrated schema v8 -> v9: dropped projects.position')
 
 
+def _migrate_9_to_10(conn):
+    """v10 adds columns.stack_with_previous: the column is drawn under the visible column to its left."""
+    conn.execute('ALTER TABLE columns ADD COLUMN stack_with_previous INTEGER NOT NULL DEFAULT 0')
+    logger.info('Migrated schema v9 -> v10: added columns.stack_with_previous')
+
+
+def _migrate_10_to_11(conn):
+    """v11 renames columns.stack_with_previous to stacked: columns that are ticked and next to each other
+    share one slot on the board (a column no longer stacks "under" its neighbour)."""
+    conn.execute('ALTER TABLE columns RENAME COLUMN stack_with_previous TO stacked')
+    logger.info('Migrated schema v10 -> v11: renamed columns.stack_with_previous to stacked')
+
+
+def _migrate_11_to_12(conn):
+    """v12 adds columns.counts_as_work: time a card spends in such a column is "time spent" on the burn-up."""
+    conn.execute('ALTER TABLE columns ADD COLUMN counts_as_work INTEGER NOT NULL DEFAULT 0')
+    logger.info('Migrated schema v11 -> v12: added columns.counts_as_work')
+
+
 def init(normalize, default_board):
     """Create or upgrade the database; on first run import kanban.json (or seed a blank board).
 
@@ -1148,7 +1338,7 @@ def init(normalize, default_board):
         version = conn.execute('PRAGMA user_version').fetchone()[0]
         if version >= SCHEMA_VERSION:
             return
-        if version in (1, 2, 3, 4, 5, 6, 7, 8):
+        if version in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11):
             if version == 1:
                 _migrate_1_to_2(conn)
             if version <= 2:
@@ -1163,7 +1353,13 @@ def init(normalize, default_board):
                 _migrate_6_to_7(conn)
             if version <= 7:
                 _migrate_7_to_8(conn)
-            _migrate_8_to_9(conn)
+            if version <= 8:
+                _migrate_8_to_9(conn)
+            if version <= 9:
+                _migrate_9_to_10(conn)
+            if version <= 10:
+                _migrate_10_to_11(conn)
+            _migrate_11_to_12(conn)
         else:
             if os.path.exists(LEGACY_JSON):
                 with open(LEGACY_JSON, 'r', encoding='utf-8') as f:

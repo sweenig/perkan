@@ -30,6 +30,19 @@ function fmtDateTime(iso){
 let latestBoard = null;
 let activeProjectFilter = null;
 let cardTruncationEnabled = localStorage.getItem('cardTruncationEnabled') !== 'false';
+// Cards the user flipped to the opposite of the global truncation mode. Kept in memory only: a reload or
+// the header Truncate button puts every card back on the global mode.
+const flippedCards = new Set();
+function cardIsTruncated(id){ return cardTruncationEnabled !== flippedCards.has(id); }
+
+// "Expand vertical" arrows pointing away from a centre line; collapse is the same with the arrows reversed.
+function expandIconSvg(expand){
+  const arrows = expand
+    ? 'M8 6V2M5.5 4.5L8 2l2.5 2.5M8 10v4M5.5 11.5L8 14l2.5-2.5'
+    : 'M8 2v4M5.5 3.5L8 6l2.5-2.5M8 14v-4M5.5 12.5L8 10l2.5 2.5';
+  return `<svg class="expand-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10"/><path d="${arrows}"/></svg>`;
+}
+function cardToggleLabel(truncated){ return truncated ? 'Expand this card' : 'Collapse this card'; }
 let sprintOnlyEnabled = localStorage.getItem('sprintOnlyEnabled') === 'true';
 let draggedCardId = null;
 let draggedCardColumnId = null;
@@ -314,7 +327,8 @@ function createCardElement(card, projectMap) {
   const projectDetails = projectMap && projectMap.get(projectName);
   const projectColor = projectDetails && projectDetails.color ? projectDetails.color : null;
   const el = document.createElement('div');
-  el.className = 'card' + (cardTruncationEnabled ? ' card-truncated' : '');
+  const truncated = cardIsTruncated(card.id);
+  el.className = 'card' + (truncated ? ' card-truncated' : '') + (flippedCards.has(card.id) ? ' card-flipped' : '');
   el.draggable = true;
   el.dataset.id = card.id;
   el.dataset.order = card.order !== undefined ? card.order : 0;
@@ -339,6 +353,7 @@ function createCardElement(card, projectMap) {
         ` : ''}
       </div>
       <div class="card-footer-right">
+        <button type="button" class="card-toggle" title="${cardToggleLabel(truncated)}" aria-label="${cardToggleLabel(truncated)}">${expandIconSvg(truncated)}</button>
         <button class="edit" title="Edit card">✏️</button>
       </div>
     </div>
@@ -387,6 +402,18 @@ function createCardElement(card, projectMap) {
     draggedCardId = null;
     draggedCardColumnId = null;
     hideDropZones();
+  });
+
+  el.querySelector('.card-toggle').addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    if(flippedCards.has(card.id)) flippedCards.delete(card.id); else flippedCards.add(card.id);
+    const nowTruncated = cardIsTruncated(card.id);
+    el.classList.toggle('card-truncated', nowTruncated);
+    el.classList.toggle('card-flipped', flippedCards.has(card.id));
+    const toggle = ev.currentTarget;
+    toggle.innerHTML = expandIconSvg(nowTruncated);
+    toggle.title = cardToggleLabel(nowTruncated);
+    toggle.setAttribute('aria-label', cardToggleLabel(nowTruncated));
   });
 
   el.querySelector('.edit').addEventListener('click', async (ev) => {
@@ -513,6 +540,9 @@ async function render(options = {}){
   hideLinkPreviewImmediate();
   hideProjectPreviewImmediate();
   boardEl.innerHTML = '';
+  let lastSlot = null;    // the last element placed straight on the board: a column, or a stack of columns
+  let lastStacked = false; // whether the last visible column is stacked (so the next stacked one joins it)
+  let stackEl = null;     // the stack wrapper when lastSlot already holds a stack
   for(const col of board.columns){
     if(col.hidden){
       continue;
@@ -592,7 +622,22 @@ async function render(options = {}){
     });
     colEl.appendChild(addBtn);
 
-    boardEl.appendChild(colEl);
+    if(col.stacked && lastSlot && lastStacked){
+      // stacked columns that sit next to each other share one horizontal slot (hidden columns are skipped)
+      if(!stackEl){
+        stackEl = document.createElement('div');
+        stackEl.className = 'column-stack';
+        boardEl.replaceChild(stackEl, lastSlot);
+        stackEl.appendChild(lastSlot);
+        lastSlot = stackEl;
+      }
+      stackEl.appendChild(colEl);
+    } else {
+      boardEl.appendChild(colEl);
+      lastSlot = colEl;
+      stackEl = null;
+    }
+    lastStacked = !!col.stacked;
   }
 
   refreshProjectInputs();
@@ -801,6 +846,12 @@ if(sprintOnlyBtn && document.getElementById('board')){
   });
 }
 
+// The header button shows what a click does, like the per-card one: expand while truncating, collapse otherwise.
+function setTruncateBtnLabel(){
+  const btn = document.getElementById('truncateBtn');
+  if(btn) btn.innerHTML = expandIconSvg(cardTruncationEnabled) + '<span>Truncate</span>';
+}
+
 const truncateBtn = document.getElementById('truncateBtn');
 if(truncateBtn){
   // Only attach listener if we're on the board view (boardEl exists)
@@ -808,10 +859,12 @@ if(truncateBtn){
   if (boardEl) {
     truncateBtn.addEventListener('click', ()=>{
       cardTruncationEnabled = !cardTruncationEnabled;
+      flippedCards.clear();                      // the global mode wins again for every card
       localStorage.setItem('cardTruncationEnabled', cardTruncationEnabled);
       const btn = document.getElementById('truncateBtn');
       btn.setAttribute('aria-pressed', cardTruncationEnabled ? 'true' : 'false');
       btn.classList.toggle('active', cardTruncationEnabled);
+      setTruncateBtnLabel();
       render({useLatest: true});
     });
   }
@@ -1440,6 +1493,7 @@ if(truncateBtn2 && cardTruncationEnabled){
   truncateBtn2.setAttribute('aria-pressed', 'true');
   truncateBtn2.classList.add('active');
 }
+setTruncateBtnLabel();
 
 // Initial render (only on board view page)
 const boardEl = document.getElementById('board');

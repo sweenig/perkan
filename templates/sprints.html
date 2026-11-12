@@ -15,6 +15,7 @@
           <a href="/" class="view-link">🎯 Board</a>
           <a href="/list" class="view-link">📋 List</a>
           <span class="view-link active">🏃 Sprints</span>
+          <a href="/burnup" class="view-link">📈 Burn-up</a>
         </div>
         <div id="projectFilters" class="project-filters" aria-live="polite"></div>
         <label class="sp-toggle"><input type="checkbox" id="showClosed"> Show closed sprints</label>
@@ -40,6 +41,29 @@
         <div class="sp-actions">
           <button type="button" class="sp-btn" data-close>Cancel</button>
           <button type="submit" class="sp-btn sp-primary" id="spSave">Create</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="cardDialog" class="sp-dialog">
+      <form method="dialog" id="cardForm">
+        <h2 id="cardDialogTitle">New card</h2>
+        <label>Title
+          <input type="text" id="ncTitle" maxlength="200" autocomplete="off" required>
+        </label>
+        <label>Project <small>(optional)</small>
+          <select id="ncProject"></select>
+        </label>
+        <label>Assignee <small>(optional)</small>
+          <input type="text" id="ncAssignee" maxlength="80" autocomplete="off">
+        </label>
+        <label>Description <small>(optional)</small>
+          <textarea id="ncDescription" rows="4"></textarea>
+        </label>
+        <p id="ncError" class="sp-error" hidden></p>
+        <div class="sp-actions">
+          <button type="button" class="sp-btn" data-close>Cancel</button>
+          <button type="submit" class="sp-btn sp-primary">Add card</button>
         </div>
       </form>
     </dialog>

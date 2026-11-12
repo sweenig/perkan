@@ -26,6 +26,7 @@ Columns are workflow status. A sprint is a time box that cards belong to, so the
 - **Done cards of a closed sprint are hidden** from the board and `list_cards`. `include_closed=true` or a `sprint` filter shows them.
 - The board's **🏃 Current sprint** button hides everything outside the active sprint (your choice is remembered in the browser).
 - `PERKAN_TZ` (default UTC) decides which day counts as today.
+- **Burn-up** (`/burnup`, `GET /api/sprint/<id|active>/burnup?step=hour|day`) plots the cumulative minutes a sprint's cards spent in columns marked Counts as work, across the sprint's dates. It is wall-clock time, counted only while the card was in that sprint (card sprint history) and inside the sprint's dates; cards in progress together add up. A card with no recorded column history is listed as unknown, not as 0; a card in the sprint with no sprint history counts for the whole sprint and is flagged. `PERKAN_TZ` also sets where each day starts and the times shown.
 
 Moving from a weekly "Done m/d" column setup: `scripts/migrate_to_sprints.py` turns them into closed sprints (dry run unless `--apply`; back up first).
 
@@ -47,7 +48,8 @@ Every MCP tool calls the matching `/api/*` route, so behavior is the same as the
 
 - Hidden columns (and their cards) are left out of `GET /api/board`, `/api/columns` and `/api/cards` unless `?include_hidden=true`. Export always includes everything.
 - `GET /api/cards` returns `{cards, total}`; filters are `column`, `project`, `assignee`, `sprint`, `query`, paged with `limit` and `offset`.
-- Projects can carry `repo_path`, `repo_url`, `notes` and `links` (Settings > Projects > Details, `/api/project`, MCP `create_project` / `update_project`). They are shown only when set. On update, a field you leave out is unchanged and an empty value clears it; `links` replaces the whole list. Merge-importing never blanks a project's fields.
+- Projects can carry `repo_path`, `repo_url`, `notes` and `links` (Settings > Projects, pencil icon; `/api/project`, MCP `create_project` / `update_project`). They are shown only when set. On update, a field you leave out is unchanged and an empty value clears it; `links` replaces the whole list. Merge-importing never blanks a project's fields. Projects have no order of their own: they are listed alphabetically, and `/api/project/<n>` counts in that order.
+- Columns can be **stacked** (`stacked`): visible stacked columns that sit next to each other share one slot on the board and split its height equally. They can also be marked **Counts as work** (`counts_as_work`), which is what the burn-up counts as time spent. Both are in Settings > Statuses, `create_column` / `update_column` and export/import.
 
 ## Tests
 

@@ -200,9 +200,12 @@ function backlogSection() {
   const items = cardsFor(null, false);
   const head = el('div', 'sp-head');
   head.append(el('span', 'sp-kind', 'Backlog'), el('span', 'sp-title', 'Backlog'),
-    el('span', 'sp-meta', countLabel(items)));
+    el('span', 'sp-meta', countLabel(items)), el('span', 'sp-spacer'));
+  head.appendChild(button('＋ Add card', '', () => openCardDialog('top'), 'Add a card at the top of the backlog'));
   box.appendChild(head);
   box.appendChild(listFor(box, items.filter(matchesProject), null, false));
+  const bottom = button('＋ Add card', 'sp-add-bottom', () => openCardDialog('bottom'), 'Add a card at the bottom of the backlog');
+  box.appendChild(bottom);
   wireDrop(box, 'backlog');
   return box;
 }
@@ -309,6 +312,47 @@ async function dropCard(id, target, neighborIds, index) {
 }
 
 // ---------------------------------------------------------------- dialogs
+
+// New backlog card: `where` is 'top' or 'bottom' of the backlog.
+let newCardWhere = 'bottom';
+
+function openCardDialog(where) {
+  newCardWhere = where;
+  $('cardDialogTitle').textContent = where === 'top' ? 'New card at the top of the backlog' : 'New card at the bottom of the backlog';
+  $('ncTitle').value = '';
+  $('ncDescription').value = '';
+  $('ncAssignee').value = '';
+  const select = $('ncProject');
+  select.replaceChildren(new Option('(no project)', ''));
+  state.projects.forEach((p) => select.appendChild(new Option(p.name, p.name)));
+  select.value = state.project || '';          // an active project filter pre-selects its project
+  $('ncError').hidden = true;
+  $('cardDialog').showModal();
+  $('ncTitle').focus();
+}
+
+$('cardForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const title = $('ncTitle').value.trim();
+  if (!title) { $('ncError').textContent = 'A title is required.'; $('ncError').hidden = false; return; }
+  const body = { title, sprint: 'backlog', column: Object.keys(state.columns)[0] };
+  if ($('ncDescription').value.trim()) body.description = $('ncDescription').value.trim();
+  if ($('ncAssignee').value.trim()) body.assignee = $('ncAssignee').value.trim();
+  if ($('ncProject').value) body.project = $('ncProject').value;
+  if (newCardWhere === 'top') {                // just ahead of the first backlog card (all of them, filtered or not)
+    const orders = cardsFor(null, false).map((c) => c.order);
+    if (orders.length) body.order = Math.min(...orders) - 1;
+  }                                            // bottom: the default puts it after everything
+  try {
+    await api('POST', '/api/card', body);
+    $('cardDialog').close();
+  } catch (err) {
+    $('ncError').textContent = err.message;
+    $('ncError').hidden = false;
+    return;
+  }
+  await load();
+});
 
 async function run(fn) {
   try {

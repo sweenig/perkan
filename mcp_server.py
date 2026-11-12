@@ -32,6 +32,15 @@ _DONE = {'type': 'boolean',
          'description': 'True for a done column: moving a card into it (from a non-done column) sets '
                         "the card's completed_at."}
 
+_STACK = {'type': 'boolean',
+          'description': 'True to stack the column: visible columns that are stacked and next to each other share '
+                         'one horizontal slot on the board, top to bottom, splitting its height equally. A stacked '
+                         'column with no stacked neighbour looks like a normal one. Cards do not move.'}
+
+_WORK = {'type': 'boolean',
+         'description': 'True if time a card spends in this column counts as time spent (work) on the sprint '
+                        'burn-up page, e.g. In Progress. Leave off for waiting columns.'}
+
 _SPRINT_ARG = {'type': 'string', 'description': 'Sprint id, "active" (the active sprint) or "backlog" (no sprint).'}
 _DATE = {'type': 'string', 'description': 'yyyy-mm-dd; a sprint ends at the end of its end_date.'}
 
@@ -267,18 +276,22 @@ TOOLS = [
            'cards': {'type': 'boolean', 'description': 'false returns summaries only (default true).'}}),
      _tool_get_card_stats),
     ('delete_card', 'Delete a card by id.', _obj({'id': _STR}, ['id']), _tool_delete_card),
-    ('list_columns', 'List columns (id, title, color, hidden, is_done, is_current_done) without cards. Hidden '
+    ('list_columns', 'List columns (id, title, color, hidden, is_done, is_current_done, stacked, counts_as_work) without cards. Hidden '
                      'columns are left out unless include_hidden is true. The result also has "current_done" '
                      '({id, title} of the current done column, hidden or not, or null).', _obj(_HIDDEN), _tool_list_columns),
     ('create_column', 'Create a column. Set is_done for a column that holds finished cards; is_current_done makes it '
-                      'the one current done column (clearing the marker elsewhere).',
+                      'the one current done column (clearing the marker elsewhere). stacked puts it in a stack with the '
+                      'stacked columns next to it (one shared slot on the board). counts_as_work marks a column whose '
+                      'time counts as time spent on the sprint burn-up.',
      _obj({'title': _STR, 'color': _STR, 'hidden': {'type': 'boolean'}, 'is_done': _DONE, 'is_current_done': _DONE,
-           'position': {'type': 'integer'}}, ['title']),
+           'stacked': _STACK, 'counts_as_work': _WORK, 'position': {'type': 'integer'}}, ['title']),
      _tool_create_column),
     ('update_column', 'Rename, recolor, hide/show, mark as a done column, mark as the current done column '
-                      '(is_current_done; only one column holds it, so use this at weekly rollover), or reposition a column.',
+                      '(is_current_done; only one column holds it, so use this at weekly rollover), stack it with the stacked '
+                      'columns next to it (stacked), mark it as a column whose time counts as work (counts_as_work), or reposition '
+                      'a column.',
      _obj({'id': _STR, 'title': _STR, 'color': _STR, 'hidden': {'type': 'boolean'}, 'is_done': _DONE, 'is_current_done': _DONE,
-           'position': {'type': 'integer'}}, ['id']),
+           'stacked': _STACK, 'counts_as_work': _WORK, 'position': {'type': 'integer'}}, ['id']),
      _tool_update_column),
     ('delete_column', 'Delete a column. Optionally move its cards to another column first; otherwise they are deleted.',
      _obj({'id': _STR, 'move_to': dict(_STR, description='Column id to receive the cards.')}, ['id']),

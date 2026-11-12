@@ -1,0 +1,50 @@
+.burnup-page{height:auto;min-height:100vh}
+.bu-main{max-width:1040px;width:100%;box-sizing:border-box;margin:0 auto;padding:20px;display:flex;flex-direction:column;gap:16px}
+.bu-card{background:#131320;border:1px solid #2a2a3a;border-radius:8px;padding:16px 18px}
+.bu-card h1{margin:0;font-size:20px}
+.bu-select{max-width:100%;font:inherit;font-size:20px;font-weight:600;color:#e6e8ee;background:#1b1b25;border:1px solid #3a3a4d;border-radius:6px;padding:4px 8px;cursor:pointer}
+.bu-select:hover{border-color:#b78ef5}
+.bu-card h2{margin:0 0 10px;font-size:16px}
+.bu-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+.bu-sub{margin:4px 0 0;color:#a0a4ad;font-size:13px}
+.bu-total{text-align:right}
+.bu-total-value{display:block;font-size:26px;font-weight:600;color:#e6e8ee}
+.bu-total-label{font-size:12px;color:#a0a4ad}
+.bu-note{margin:12px 0 0;padding:8px 12px;border-radius:6px;border:1px solid #3a3a4d;color:#e6e8ee;font-size:13px}
+.bu-note a{color:#b78ef5}
+.bu-chart-wrap{position:relative;margin-top:12px}
+.bu-chart{display:block;width:100%;height:auto}
+.bu-chart text{font-family:inherit}
+.bu-axis-text{fill:#a0a4ad;font-size:11px}
+.bu-axis-title{fill:#8a8e9b;font-size:11px}
+.bu-grid{stroke:#262637;stroke-width:1}
+.bu-axis{stroke:#3a3a4d;stroke-width:1}
+.bu-line{fill:none;stroke:#b78ef5;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.bu-area{fill:#b78ef5;fill-opacity:.1;stroke:none}
+.bu-dot{fill:#b78ef5;stroke:#131320;stroke-width:2}
+.bu-cross{stroke:#5a5a73;stroke-width:1}
+.bu-endlabel{fill:#e6e8ee;font-size:12px;font-weight:600}
+.bu-tip{position:absolute;pointer-events:none;background:#0f0f18;color:#e6e8ee;border:1px solid rgba(255,255,255,.18);border-radius:8px;padding:8px 10px;font-size:12px;line-height:1.4;box-shadow:0 8px 20px rgba(0,0,0,.5);white-space:nowrap;z-index:5}
+.bu-tip .bu-tip-day{color:#a0a4ad}
+.bu-tip .bu-tip-row{display:flex;align-items:center;gap:6px;margin-top:2px}
+.bu-tip .bu-tip-key{width:12px;height:0;border-top:2px solid #b78ef5;display:inline-block}
+.bu-tip .bu-tip-value{font-size:14px;font-weight:600}
+.bu-desc{color:#a0a4ad;font-size:12px;margin:8px 0 0}
+.bu-actions{margin-top:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.bu-seg{display:inline-flex}
+.bu-seg .bu-btn{border-radius:0}
+.bu-seg .bu-btn:first-child{border-radius:6px 0 0 6px}
+.bu-seg .bu-btn:last-child{border-radius:0 6px 6px 0;border-left:0}
+.bu-btn[aria-pressed=true]{background:#5b2e8a;color:#fff;border-color:#5b2e8a}
+.bu-chart:focus-visible{outline:2px solid #b78ef5;outline-offset:2px}
+#buDayTable{max-height:360px;overflow:auto}
+.bu-btn{padding:6px 12px;border-radius:6px;font-weight:600;font-size:13px;color:#b78ef5;background:transparent;border:1px solid #3a3a4d;cursor:pointer;font-family:inherit;transition:all .2s ease}
+.bu-btn:hover{background:rgba(183,142,245,.14);border-color:#b78ef5}
+.bu-table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px}
+.bu-table th,.bu-table td{text-align:left;padding:6px 8px;border-bottom:1px solid #262637}
+.bu-table th{color:#a0a4ad;font-weight:600}
+.bu-table td.num,.bu-table th.num{text-align:right;font-variant-numeric:tabular-nums}
+.bu-table .bu-muted{color:#8a8e9b}
+.bu-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.bu-list a{color:#b78ef5}
+.bu-sub-h{margin:14px 0 4px;font-size:13px;color:#a0a4ad}
