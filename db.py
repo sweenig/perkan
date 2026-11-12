@@ -823,6 +823,40 @@ def _midnight(d, zone):
     return datetime(d.year, d.month, d.day, tzinfo=zone).astimezone(timezone.utc)
 
 
+def _stays(hist, now):
+    """[(column_id, start, end)] for one card from its history rows (dicts with to_column, at, source), oldest
+    first: each stay runs from the move into the column to the next move, and the last one to `now`.
+    Returns None when no row was actually observed (empty, or only backfill/migration rows): the time is unknown."""
+    if not any(h['source'] not in NO_HISTORY_SOURCES for h in hist):
+        return None
+    return [(h['to_column'], _parse_ts(h['at']), _parse_ts(hist[i + 1]['at']) if i + 1 < len(hist) else now)
+            for i, h in enumerate(hist)]
+
+
+def card_time_in_columns(conn, card_id, now=None):
+    """Wall-clock minutes a card has spent in each column it has been in, summing repeated stays; the column it
+    is in now counts up to `now`. Not active effort. Returns {'known': False, 'reason': ...} when the history
+    holds no observed move (pre-timeline cards), never zeros. Otherwise {'known': True, 'columns': [{id, title,
+    minutes, stays, counts_as_work}], 'work_minutes': N} with the columns in board order and work_minutes the sum over
+    columns marked Counts as work."""
+    now = now or datetime.now(timezone.utc)
+    hist = conn.execute('SELECT to_column, at, source FROM card_history WHERE card_id = ? ORDER BY id', (card_id,)).fetchall()
+    stays = _stays(hist, now)
+    if stays is None:
+        return {'known': False, 'reason': 'no recorded column history'}
+    seconds, count = {}, {}
+    for col, start, end in stays:
+        seconds[col] = seconds.get(col, 0.0) + max(0.0, (end - start).total_seconds())
+        count[col] = count.get(col, 0) + 1
+    info = {r['id']: (r['position'], bool(r['counts_as_work']), r['title'])
+            for r in conn.execute('SELECT id, position, counts_as_work, title FROM columns')}
+    order = sorted(seconds, key=lambda c: (info[c][0] if c in info else 10 ** 9, c))   # deleted columns last
+    columns = [{'id': c, 'title': info[c][2] if c in info else c, 'minutes': round(seconds[c] / 60.0),
+                'stays': count[c], 'counts_as_work': info[c][1] if c in info else False} for c in order]
+    return {'known': True, 'columns': columns,
+            'work_minutes': round(sum(seconds[c] for c in seconds if c in info and info[c][1]) / 60.0)}
+
+
 def _overlap_minutes(segments, lo, hi):
     """Minutes of the (start, end) datetime segments that fall inside [lo, hi]."""
     total = 0.0
@@ -908,16 +942,11 @@ def sprint_burnup(conn, sprint_id, now=None, step='day'):
             member, note = [(window_start, stop)], 'no sprint history: counted for the whole sprint'
         # where was the card, and when?
         hist = conn.execute('SELECT to_column, at, source FROM card_history WHERE card_id = ? ORDER BY id', (cid,)).fetchall()
-        if not any(h['source'] not in NO_HISTORY_SOURCES for h in hist):
+        stays = _stays(hist, now)
+        if stays is None:
             out['unknown'].append({'id': cid, 'title': card['title'], 'reason': 'no recorded column history'})
             continue
-        work = []
-        for i, h in enumerate(hist):
-            if h['to_column'] not in work_cols:
-                continue
-            begin = _parse_ts(h['at'])
-            end = _parse_ts(hist[i + 1]['at']) if i + 1 < len(hist) else now
-            work.append((begin, end))
+        work = [(begin, end) for col, begin, end in stays if col in work_cols]
         # keep only the part of the card's working time that was inside the sprint
         counted = []
         for wa, wb in work:

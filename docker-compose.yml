@@ -9,6 +9,7 @@ services:
       - perkan-data:/app/data
     environment:
       - PYTHONUNBUFFERED=1
+      - PERKAN_TZ    # passed through from .env or the shell only when it is set there (default: UTC)
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:5000/ || exit 1"]
       interval: 30s

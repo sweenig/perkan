@@ -583,15 +583,17 @@ def stats():
 
 @app.route('/api/card/<card_id>/history', methods=['GET'])
 def card_history(card_id):
-    """Column-change history, oldest first, plus the dates derived from it."""
+    """Column-change history, oldest first, plus the dates and the time per column derived from it."""
     with db.read() as conn:
         card, column_id = db.get_card(conn, card_id)
         if card is None:
             return jsonify({'error': 'card not found'}), 404
         history = db.card_history(conn, card_id)
+        time_in_columns = db.card_time_in_columns(conn, card_id)
     return jsonify({'id': card_id, 'column': column_id, 'created_at': card.get('created_at'),
                     'started_at': card.get('started_at'), 'completed_at': card.get('completed_at'),
-                    'column_since': card.get('column_since'), 'history': history})
+                    'column_since': card.get('column_since'), 'history': history,
+                    'time_in_columns': time_in_columns})
 
 
 @app.route('/api/card/<card_id>', methods=['DELETE'])

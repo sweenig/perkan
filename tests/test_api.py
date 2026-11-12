@@ -1195,6 +1195,80 @@ class BurnupTests(Base):
         self.assertIn(b'/api/sprint/', self.c.get('/static/burnup.js').data)
 
 
+class CardTimeTests(Base):
+    """Total minutes per column from a card's history, checked by hand. now = 2026-11-03 18:00 UTC.
+    Card A: created in todo 07:00; doing 07:46; archive (waiting) 12:14; doing again 13:00; done 15:30.
+      todo 07:00-07:46 = 46, doing 07:46-12:14 = 268 and 13:00-15:30 = 150 -> 418 over 2 stays,
+      archive 12:14-13:00 = 46, done 15:30-18:00 = 150 (the current column counts up to now).
+    Only 'doing' counts as work, so work_minutes = 418 and none of the waiting time is in it."""
+    NOW = datetime.datetime(2026, 11, 3, 18, 0, tzinfo=datetime.timezone.utc)
+
+    def history(self, cid, rows):
+        with db.write() as conn:
+            conn.execute('DELETE FROM card_history WHERE card_id = ?', (cid,))
+            prev = None
+            for col, at, source in rows:
+                conn.execute('INSERT INTO card_history (card_id, from_column, to_column, at, source) VALUES (?,?,?,?,?)',
+                             (cid, prev, col, '2026-11-03T%s:00Z' % at, source))
+                prev = col
+
+    def t(self, cid, now=None):
+        with db.read() as conn:
+            return db.card_time_in_columns(conn, cid, now=now or self.NOW)
+
+    def test_hand_calculation_repeated_stays_and_waiting_time(self):
+        self.c.put('/api/column/doing', json={'counts_as_work': True})
+        self.history('t1', [('todo', '07:00', 'api'), ('doing', '07:46', 'api'), ('archive', '12:14', 'api'),
+                            ('doing', '13:00', 'api'), ('done', '15:30', 'api')])
+        out = self.t('t1')
+        self.assertTrue(out['known'])
+        self.assertEqual([(c['id'], c['minutes'], c['stays'], c['counts_as_work']) for c in out['columns']],
+                         [('todo', 46, 1, False), ('doing', 418, 2, True), ('done', 150, 1, False), ('archive', 46, 1, False)])
+        self.assertEqual([c['title'] for c in out['columns']], ['To Do', 'Doing', 'Done', 'Archive'])   # board order
+        self.assertEqual(out['work_minutes'], 418)
+        # the card's own example: In Progress 07:46 -> Waiting 12:14 is 268 minutes and none of the waiting counts
+        self.history('t2', [('todo', '07:00', 'api'), ('doing', '07:46', 'api'), ('archive', '12:14', 'api')])
+        out = self.t('t2', now=datetime.datetime(2026, 11, 3, 12, 14, tzinfo=datetime.timezone.utc))
+        self.assertEqual(next(c['minutes'] for c in out['columns'] if c['id'] == 'doing'), 268)
+        self.assertEqual(out['work_minutes'], 268)
+        later = self.t('t2', now=datetime.datetime(2026, 11, 3, 20, 0, tzinfo=datetime.timezone.utc))
+        self.assertEqual(later['work_minutes'], 268)                         # waiting time keeps growing elsewhere
+        self.assertEqual(next(c['minutes'] for c in later['columns'] if c['id'] == 'archive'), 466)
+
+    def test_no_work_column_ticked_means_zero_work_minutes_but_columns_still_listed(self):
+        self.history('t1', [('todo', '07:00', 'api'), ('doing', '08:00', 'api')])
+        out = self.t('t1')
+        self.assertEqual(out['work_minutes'], 0)
+        self.assertEqual(next(c['minutes'] for c in out['columns'] if c['id'] == 'doing'), 600)
+
+    def test_unknown_when_history_was_not_observed(self):
+        self.history('t1', [('done', '00:00', 'backfill')])
+        self.assertEqual(self.t('t1'), {'known': False, 'reason': 'no recorded column history'})
+        self.history('t2', [])
+        self.assertFalse(self.t('t2')['known'])                              # unknown, never zeros
+
+    def test_deleted_column_is_listed_last_under_its_id(self):
+        self.history('t1', [('todo', '07:00', 'api'), ('gone', '08:00', 'api')])
+        out = self.t('t1')
+        self.assertEqual([(c['id'], c['title'], c['counts_as_work']) for c in out['columns']],
+                         [('todo', 'To Do', False), ('gone', 'gone', False)])
+
+    def test_api_mcp_and_modal_carry_it(self):
+        self.c.put('/api/column/doing', json={'counts_as_work': True})
+        made = self.post(title='fresh', column='todo')
+        h = self.get('/api/card/%s/history' % made['id'])
+        self.assertTrue(h['time_in_columns']['known'])
+        self.assertEqual(h['time_in_columns']['columns'][0]['id'], 'todo')
+        r = self.c.post('/mcp', json={'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+                                       'params': {'name': 'get_card_history', 'arguments': {'id': made['id']}}})
+        self.assertIn('time_in_columns', r.get_json()['result']['structuredContent'])
+        tools = {t['name']: t for t in self.c.post('/mcp', json={'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'}).get_json()['result']['tools']}
+        self.assertIn('time_in_columns', tools['get_card_history']['description'])
+        js = self.c.get('/static/app.js').data
+        self.assertIn(b'timeInColumnsHtml', js)
+        self.assertIn(b'fmtDuration', js)
+
+
 class WorkColumnTests(Base):
     def call(self, tool, **arguments):
         r = self.c.post('/mcp', json={'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
