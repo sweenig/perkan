@@ -25,7 +25,7 @@ DATA_DIR = os.environ.get('PERKAN_DATA_DIR') or os.path.join(os.path.dirname(__f
 DB_FILE = os.path.join(DATA_DIR, 'perkan.db')
 LEGACY_JSON = os.path.join(DATA_DIR, 'kanban.json')
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 9
 ORDER_STEP = 1_000_000.0
 MIN_GAP = 1e-3   # below this, neighbouring order values are renumbered to make room
 
@@ -40,9 +40,12 @@ CREATE TABLE IF NOT EXISTS columns (
     is_current_done INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS projects (
-    name     TEXT PRIMARY KEY,
-    color    TEXT NOT NULL,
-    position INTEGER NOT NULL
+    name      TEXT PRIMARY KEY,
+    color     TEXT NOT NULL,
+    repo_path TEXT NOT NULL DEFAULT '',
+    repo_url  TEXT NOT NULL DEFAULT '',
+    notes     TEXT NOT NULL DEFAULT '',
+    links     TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS sprints (
     id         TEXT PRIMARY KEY,
@@ -204,9 +207,7 @@ def load_board(conn, include_hidden=False, include_closed=False):
             card['added_to_sprint_at'] = adds[row['id']]
         by_id[row['column_id']]['cards'].append(card)
 
-    projects = [{'name': r['name'], 'color': r['color']}
-                for r in conn.execute('SELECT name, color FROM projects ORDER BY position')]
-    return {'columns': columns, 'projects': projects, 'active_sprint': active_sprint(conn)}
+    return {'columns': columns, 'projects': list_projects(conn), 'active_sprint': active_sprint(conn)}
 
 
 def list_columns(conn, include_hidden=False):
@@ -632,12 +633,40 @@ def place_columns(conn, ids):
     conn.executemany('UPDATE columns SET position = ? WHERE id = ?', [(i, cid) for i, cid in enumerate(ids)])
 
 
+PROJECT_TEXT_FIELDS = ('repo_path', 'repo_url', 'notes')
+
+
+def project_from_row(row):
+    """A project as the API shows it: name and color always, the optional fields only when set."""
+    proj = {'name': row['name'], 'color': row['color']}
+    for key in PROJECT_TEXT_FIELDS:
+        if row[key]:
+            proj[key] = row[key]
+    links = json.loads(row['links'] or '[]')
+    if links:
+        proj['links'] = links
+    return proj
+
+
+PROJECT_ORDER = 'ORDER BY name COLLATE NOCASE, name'   # projects have no order of their own: alphabetical
+
+
+def list_projects(conn):
+    return [project_from_row(r) for r in conn.execute('SELECT * FROM projects ' + PROJECT_ORDER)]
+
+
+def get_project(conn, name):
+    row = conn.execute('SELECT * FROM projects WHERE name = ?', (name,)).fetchone()
+    return project_from_row(row) if row else None
+
+
+def project_values(proj):
+    """The optional project columns (repo_path, repo_url, notes, links as JSON) from a project dict."""
+    return tuple(proj.get(k) or '' for k in PROJECT_TEXT_FIELDS) + (json.dumps(proj.get('links') or []),)
+
+
 def project_names(conn):
-    return [r['name'] for r in conn.execute('SELECT name FROM projects ORDER BY position')]
-
-
-def place_projects(conn, names):
-    conn.executemany('UPDATE projects SET position = ? WHERE name = ?', [(i, n) for i, n in enumerate(names)])
+    return [r['name'] for r in conn.execute('SELECT name FROM projects ' + PROJECT_ORDER)]
 
 
 # ---------------------------------------------------------------- whole-board replace
@@ -670,8 +699,9 @@ def replace_board(conn, board):
             if not card.get('created_at') and created.get(card['id']):
                 card = dict(card, created_at=created[card['id']])
             insert_card(conn, col['id'], card)
-    for i, proj in enumerate(board.get('projects', [])):
-        conn.execute('INSERT INTO projects (name, color, position) VALUES (?,?,?)', (proj['name'], proj['color'], i))
+    for proj in board.get('projects', []):
+        conn.execute('INSERT INTO projects (name, color, repo_path, repo_url, notes, links) '
+                     'VALUES (?,?,?,?,?,?)', (proj['name'], proj['color']) + project_values(proj))
     new_ids = {r['id'] for r in conn.execute('SELECT id FROM cards')}
     conn.executemany(
         'INSERT INTO card_history (card_id, from_column, to_column, at, source) VALUES (?,?,?,?,?)',
@@ -1083,6 +1113,20 @@ def _migrate_6_to_7(conn):
     logger.info('Migrated schema v6 -> v7: added sprints.added')
 
 
+def _migrate_7_to_8(conn):
+    """v8 gives projects optional repo_path, repo_url, notes and links (a JSON list of {text, url})."""
+    for col in ('repo_path', 'repo_url', 'notes'):
+        conn.execute("ALTER TABLE projects ADD COLUMN %s TEXT NOT NULL DEFAULT ''" % col)
+    conn.execute("ALTER TABLE projects ADD COLUMN links TEXT NOT NULL DEFAULT '[]'")
+    logger.info('Migrated schema v7 -> v8: added project repo_path, repo_url, notes and links')
+
+
+def _migrate_8_to_9(conn):
+    """v9 drops projects.position: projects are listed alphabetically."""
+    conn.execute('ALTER TABLE projects DROP COLUMN position')
+    logger.info('Migrated schema v8 -> v9: dropped projects.position')
+
+
 def init(normalize, default_board):
     """Create or upgrade the database; on first run import kanban.json (or seed a blank board).
 
@@ -1104,7 +1148,7 @@ def init(normalize, default_board):
         version = conn.execute('PRAGMA user_version').fetchone()[0]
         if version >= SCHEMA_VERSION:
             return
-        if version in (1, 2, 3, 4, 5, 6):
+        if version in (1, 2, 3, 4, 5, 6, 7, 8):
             if version == 1:
                 _migrate_1_to_2(conn)
             if version <= 2:
@@ -1115,7 +1159,11 @@ def init(normalize, default_board):
                 _migrate_4_to_5(conn)
             if version <= 5:
                 _migrate_5_to_6(conn)
-            _migrate_6_to_7(conn)
+            if version <= 6:
+                _migrate_6_to_7(conn)
+            if version <= 7:
+                _migrate_7_to_8(conn)
+            _migrate_8_to_9(conn)
         else:
             if os.path.exists(LEGACY_JSON):
                 with open(LEGACY_JSON, 'r', encoding='utf-8') as f:

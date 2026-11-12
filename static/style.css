@@ -123,9 +123,25 @@ header{display:flex;flex-direction:column;gap:10px;padding:14px 20px;background:
 .add-column{display:flex;gap:8px;margin-top:10px}
 .projects-list{display:flex;flex-direction:column;gap:8px;margin:8px 0}
 .project-row{display:flex;gap:8px;align-items:center}
-.project-row input.project-name{flex:1;padding:6px;border:1px solid #555;border-radius:4px}
-.project-row input.project-color{width:52px;height:36px;padding:0;border:1px solid #555;border-radius:4px}
+.project-badge{flex:1;min-width:0;display:flex;align-items:baseline;gap:12px;padding:8px 14px;border-radius:8px;font-weight:600}
+.project-badge-name{white-space:nowrap}
+.project-badge-repo{font-weight:400;font-size:12px;opacity:.7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .project-row button{padding:6px 8px}
+.project-modal-content{width:auto;min-width:0;max-width:92%;box-sizing:border-box;width:560px;max-height:90vh;overflow-y:auto;border-color:#b78ef5}
+.project-modal-content h2{margin:0 0 4px}
+.project-modal-content label{display:block;margin-top:12px;font-weight:600}
+.project-modal-content input:not([type=color]),.project-modal-content textarea{display:block;width:100%;box-sizing:border-box;padding:8px;border:1px solid #555;border-radius:6px;margin-top:4px;font:inherit;font-weight:400}
+.project-modal-content textarea{min-height:70px;resize:vertical}
+.project-modal-content input[type=color]{display:block;width:52px;height:36px;padding:0;margin-top:4px;border:1px solid #555;border-radius:4px}
+.project-modal-content .hint{display:block;margin-top:3px;font-size:12px;font-weight:400;opacity:.65}
+.project-error{min-height:18px;margin-top:10px;color:#ff8a8a;font-size:13px}
+.project-modal-actions{display:flex;gap:8px;align-items:center;margin-top:8px}
+.project-modal-actions .spacer{flex:1}
+/* Settings buttons share the look of the header buttons (.view-link); Save is the filled "active" variant */
+.settings-main button:not(.settings-tab-btn),.project-modal-content button{padding:6px 12px;border-radius:6px;font-weight:600;font-size:14px;color:#b78ef5;background:transparent;border:1px solid #3a3a4d;cursor:pointer;transition:all 0.2s ease;font-family:inherit}
+.settings-main button:not(.settings-tab-btn):hover:not(:disabled),.project-modal-content button:hover:not(:disabled){background:rgba(183,142,245,0.14);border-color:#b78ef5}
+.settings-main button:not(.settings-tab-btn):disabled,.project-modal-content button:disabled{opacity:.4;cursor:default}
+#projectSaveBtn,#projectSaveBtn:hover:not(:disabled){background:#5b2e8a;color:#fff;border-color:#5b2e8a}
 .project-empty{padding:12px;border:1px dashed rgba(255,255,255,0.3);border-radius:6px;text-align:center;color:rgba(255,255,255,0.6)}
 .add-project{display:flex;gap:8px;margin-top:10px}
 .modal-actions{display:flex;justify-content:flex-end;margin-top:12px}
@@ -133,8 +149,6 @@ header{display:flex;flex-direction:column;gap:10px;padding:14px 20px;background:
 .import-block{background:#131320;border:1px solid rgba(183,142,245,0.35);border-radius:10px;padding:14px}
 .import-block h3{margin:0 0 6px;font-size:16px}
 .import-block p{margin:0 0 12px;color:rgba(255,255,255,0.7);font-size:13px}
-#downloadBoardBtn,#importBoardBtn{background:#563baf;color:#fff;border:1px solid #7d61e3;padding:8px 14px;border-radius:6px;cursor:pointer;font-weight:600}
-#downloadBoardBtn:hover,#importBoardBtn:hover{background:#6b4fe3}
 #importFileInput{width:100%;padding:8px;border-radius:6px;border:1px solid #563baf;background:#1b1b25;color:#f4f6f8;box-sizing:border-box}
 .import-mode{display:flex;flex-direction:column;gap:6px;font-size:13px;color:rgba(255,255,255,0.85);margin-top:10px}
 .import-actions{margin-top:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}

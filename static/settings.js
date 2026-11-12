@@ -111,12 +111,28 @@ async function renderStatusSettings(){
 
 }
 
+// Project links are edited as text, one per line: "label | url" or just the url.
+function projectLinksToText(links){
+  return (Array.isArray(links) ? links : []).map(l => (l.text && l.text !== l.url) ? `${l.text} | ${l.url}` : l.url).join('\n');
+}
+
+function projectLinksFromText(text){
+  return text.split('\n').map(line => line.trim()).filter(Boolean).map(line => {
+    const bar = line.lastIndexOf('|');
+    if(bar === -1) return {text: line, url: line};
+    return {text: line.slice(0, bar).trim(), url: line.slice(bar + 1).trim()};
+  });
+}
+
+let projectsCache = [];
+
+// The list only shows the projects (the server sorts them alphabetically); adding, editing, recolouring and deleting happen in the modal.
 async function renderProjectSettings(){
   const board = await fetchBoard();
   const list = document.getElementById('projectsList');
   if(!list) return;
   list.innerHTML = '';
-  const projects = Array.isArray(board.projects) ? board.projects : [];
+  const projects = projectsCache = Array.isArray(board.projects) ? board.projects : [];
   if(!projects.length){
     const empty = document.createElement('div');
     empty.className = 'project-empty';
@@ -124,64 +140,88 @@ async function renderProjectSettings(){
     list.appendChild(empty);
   }
   projects.forEach((proj, idx) => {
+    const color = proj.color || '#5b2e8a';
     const row = document.createElement('div');
     row.className = 'project-row';
     row.innerHTML = `
-      <input class="project-name" data-index="${idx}" value="${escapeHtml(proj.name || '')}" placeholder="Project name" />
-      <input class="project-color" type="color" data-index="${idx}" value="${proj.color || '#5b2e8a'}" />
-      <button class="project-up" data-index="${idx}" ${idx===0? 'disabled':''}>↑</button>
-      <button class="project-down" data-index="${idx}" ${idx===projects.length-1? 'disabled':''}>↓</button>
-      <button class="project-delete" data-index="${idx}">Delete</button>
+      <div class="project-badge" style="background:${hexToRgba(color, 0.12)};border:2px solid ${readableOnDark(color, 3)};color:${readableOnDark(color)};">
+        <span class="project-badge-name">${escapeHtml(proj.name || '')}</span>
+        ${proj.repo_path ? `<span class="project-badge-repo">${escapeHtml(proj.repo_path)}</span>` : ''}
+      </div>
+      <button type="button" class="project-edit" data-index="${idx}" title="Edit project">✏️</button>
     `;
     list.appendChild(row);
   });
 
-  list.querySelectorAll('.project-name').forEach(inp => {
-    inp.addEventListener('change', async (e) => {
-      const idx = parseInt(e.target.dataset.index, 10);
-      const name = e.target.value.trim();
-      if(!name){
-        alert('name required');
-        await renderProjectSettings();
-        return;
-      }
-      await fetch('/api/project/' + idx, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
-      await renderProjectSettings();
-    });
+  list.querySelectorAll('.project-edit').forEach(btn => {
+    btn.addEventListener('click', () => openProjectModal(parseInt(btn.dataset.index, 10)));
   });
-  list.querySelectorAll('.project-color').forEach(inp => {
-    inp.addEventListener('change', async (e) => {
-      const idx = parseInt(e.target.dataset.index, 10);
-      const color = e.target.value;
-      await fetch('/api/project/' + idx, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({color})});
-      await renderProjectSettings();
-    });
-  });
-  list.querySelectorAll('.project-up').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      const idx = parseInt(e.target.dataset.index, 10);
-      const targetPos = Math.max(0, idx - 1);
-      await fetch('/api/project/' + idx, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({position:targetPos})});
-      await renderProjectSettings();
-    });
-  });
-  list.querySelectorAll('.project-down').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      const idx = parseInt(e.target.dataset.index, 10);
-      const targetPos = idx + 1;
-      await fetch('/api/project/' + idx, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({position:targetPos})});
-      await renderProjectSettings();
-    });
-  });
-  list.querySelectorAll('.project-delete').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      const idx = parseInt(e.target.dataset.index, 10);
-      if(!confirm('Delete this project?')) return;
-      await fetch('/api/project/' + idx, {method:'DELETE'});
-      await renderProjectSettings();
-    });
-  });
+}
 
+function hexToRgba(hex, alpha){
+  const m = /^#?([0-9a-f]{6})$/i.exec((hex || '').trim());
+  if(!m) return `rgba(91,46,138,${alpha})`;
+  const n = parseInt(m[1], 16);
+  return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${alpha})`;
+}
+
+// Project modal: one form for adding (index null) and editing a project.
+let editingProjectIndex = null;
+
+function projectModalEl(id){ return document.getElementById(id); }
+
+function openProjectModal(index){
+  editingProjectIndex = index;
+  const proj = index === null ? {} : (projectsCache[index] || {});
+  projectModalEl('projectModalTitle').textContent = index === null ? 'Add project' : 'Edit project';
+  projectModalEl('projectName').value = proj.name || '';
+  projectModalEl('projectColor').value = proj.color || '#5b2e8a';
+  projectModalEl('projectRepoPath').value = proj.repo_path || '';
+  projectModalEl('projectRepoUrl').value = proj.repo_url || '';
+  projectModalEl('projectNotes').value = proj.notes || '';
+  projectModalEl('projectLinks').value = projectLinksToText(proj.links);
+  projectModalEl('projectDeleteBtn').style.display = index === null ? 'none' : '';
+  projectModalEl('projectError').textContent = '';
+  projectModalEl('projectModal').classList.remove('hidden');
+  projectModalEl('projectName').focus();
+}
+
+function closeProjectModal(){
+  projectModalEl('projectModal').classList.add('hidden');
+  editingProjectIndex = null;
+}
+
+async function saveProjectModal(){
+  const name = projectModalEl('projectName').value.trim();
+  const err = projectModalEl('projectError');
+  if(!name){ err.textContent = 'A project name is required.'; return; }
+  const body = {
+    name,
+    color: projectModalEl('projectColor').value,
+    repo_path: projectModalEl('projectRepoPath').value.trim(),
+    repo_url: projectModalEl('projectRepoUrl').value.trim(),
+    notes: projectModalEl('projectNotes').value.trim(),
+    links: projectLinksFromText(projectModalEl('projectLinks').value),
+  };
+  const isNew = editingProjectIndex === null;
+  const res = await fetch(isNew ? '/api/project' : '/api/project/' + editingProjectIndex,
+                          {method: isNew ? 'POST' : 'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  if(!res.ok){
+    const data = await res.json().catch(() => ({}));
+    err.textContent = data.error || 'Could not save the project.';
+    return;
+  }
+  closeProjectModal();
+  await renderProjectSettings();
+}
+
+async function deleteProjectFromModal(){
+  if(editingProjectIndex === null) return;
+  const name = (projectsCache[editingProjectIndex] || {}).name || 'this project';
+  if(!confirm(`Delete "${name}"? Its cards are kept but removed from the project.`)) return;
+  await fetch('/api/project/' + editingProjectIndex, {method:'DELETE'});
+  closeProjectModal();
+  await renderProjectSettings();
 }
 
 async function downloadBoardJson(){
@@ -261,28 +301,6 @@ function activateSettingsTab(tabId){
   }
 }
 
-function focusProjectInSettings(projectName){
-  if(!projectName) return;
-  let attempts = 0;
-  const tryFocus = () => {
-    const list = document.getElementById('projectsList');
-    if(list){
-      const inputs = Array.from(list.querySelectorAll('.project-name'));
-      const target = inputs.find(inp => inp.value.trim() === projectName.trim());
-      if(target){
-        target.focus();
-        target.select();
-        return;
-      }
-    }
-    attempts += 1;
-    if(attempts < 5){
-      setTimeout(tryFocus, 120);
-    }
-  };
-  tryFocus();
-}
-
 document.querySelectorAll('.settings-tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     activateSettingsTab(btn.dataset.tab);
@@ -304,15 +322,16 @@ if(addColumnBtn){
 }
 
 const addProjectBtn = document.getElementById('addProjectBtn');
-if(addProjectBtn){
-  addProjectBtn.addEventListener('click', async ()=>{
-    const name = document.getElementById('newProjectName').value.trim();
-    const color = document.getElementById('newProjectColor').value;
-    if(!name) return alert('name required');
-    await fetch('/api/project', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name, color})});
-    document.getElementById('newProjectName').value = '';
-    document.getElementById('newProjectColor').value = '#5b2e8a';
-    await renderProjectSettings();
+if(addProjectBtn) addProjectBtn.addEventListener('click', () => openProjectModal(null));
+const projectModal = document.getElementById('projectModal');
+if(projectModal){
+  projectModal.querySelector('.modal-backdrop').addEventListener('click', closeProjectModal);
+  document.getElementById('projectCancelBtn').addEventListener('click', closeProjectModal);
+  document.getElementById('projectSaveBtn').addEventListener('click', saveProjectModal);
+  document.getElementById('projectDeleteBtn').addEventListener('click', deleteProjectFromModal);
+  projectModal.addEventListener('keydown', (e) => {
+    if(e.key === 'Escape') closeProjectModal();
+    else if(e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); saveProjectModal(); }
   });
 }
 
@@ -331,12 +350,17 @@ if(importBoardBtn){
 }
 
 
-// Deep links: /settings?tab=projects&project=<name> opens that tab and focuses the project.
+// Deep links: /settings?tab=projects&project=<name> opens that tab and the project's edit form.
 (function init(){
   const params = new URLSearchParams(window.location.search);
   const tabs = Array.from(document.querySelectorAll('.settings-tab-btn')).map(b => b.dataset.tab);
   const tab = tabs.includes(params.get('tab')) ? params.get('tab') : 'statuses';
   activateSettingsTab(tab);
   const project = params.get('project');
-  if(project && tab === 'projects') focusProjectInSettings(project);
+  if(project && tab === 'projects'){
+    renderProjectSettings().then(() => {
+      const idx = projectsCache.findIndex(p => p.name === project.trim());
+      if(idx !== -1) openProjectModal(idx);
+    });
+  }
 })();

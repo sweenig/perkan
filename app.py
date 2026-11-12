@@ -126,7 +126,8 @@ def _normalize_board(data):
         name = (proj.get('name') or '').strip()
         if not name or name in seen_projects:
             continue
-        normalized_projects.append({'name': name, 'color': proj.get('color') or DEFAULT_CARD_COLOR})
+        normalized_projects.append(dict({'name': name, 'color': proj.get('color') or DEFAULT_CARD_COLOR},
+                                        **_project_extras(proj)))
         seen_projects.add(name)
 
     data['columns'] = normalized_columns
@@ -214,8 +215,7 @@ def _generate_unique_color(conn, attempts=32):
 def _find_project(conn, project_name):
     if not project_name:
         return None
-    row = conn.execute('SELECT name, color FROM projects WHERE name = ?', (project_name,)).fetchone()
-    return {'name': row['name'], 'color': row['color']} if row else None
+    return db.get_project(conn, project_name)
 
 
 def _ensure_project(conn, project_name):
@@ -226,8 +226,7 @@ def _ensure_project(conn, project_name):
     if existing:
         return existing
     color = _generate_unique_color(conn)
-    position = conn.execute('SELECT COALESCE(MAX(position), -1) + 1 FROM projects').fetchone()[0]
-    conn.execute('INSERT INTO projects (name, color, position) VALUES (?,?,?)', (project_name, color, position))
+    conn.execute('INSERT INTO projects (name, color) VALUES (?,?)', (project_name, color))
     return {'name': project_name, 'color': color}
 
 
@@ -249,6 +248,22 @@ def _clean_links(raw_links):
                 continue
             cleaned.append({'text': text or url, 'url': url})
     return cleaned
+
+
+def _project_extras(data, only_present=False):
+    """The optional project fields (repo_path, repo_url, notes, links) found in `data`, cleaned.
+    Empty values are dropped, except with only_present, where a key that was sent stays (to clear it)."""
+    extras = {}
+    for key in db.PROJECT_TEXT_FIELDS:
+        if key in data:
+            value = str(data[key] or '').strip()
+            if value or only_present:
+                extras[key] = value
+    if 'links' in data:
+        links = _clean_links(data['links'])
+        if links or only_present:
+            extras['links'] = links
+    return extras
 
 
 def _merge_boards(existing, incoming):
@@ -287,8 +302,10 @@ def _merge_boards(existing, incoming):
         if name in project_lookup:
             if proj.get('color'):
                 project_lookup[name]['color'] = proj['color']
+            project_lookup[name].update(_project_extras(proj))     # an import fills in, never blanks
         else:
-            projects.append({'name': name, 'color': proj.get('color') or DEFAULT_CARD_COLOR})
+            projects.append(dict({'name': name, 'color': proj.get('color') or DEFAULT_CARD_COLOR},
+                                 **_project_extras(proj)))
             project_lookup[name] = projects[-1]
 
     return _normalize_board(base)
@@ -758,8 +775,7 @@ def card_sprint_history(card_id):
 @app.route('/api/projects', methods=['GET'])
 def get_projects():
     with db.read() as conn:
-        projects = [{'name': r['name'], 'color': r['color']}
-                    for r in conn.execute('SELECT name, color FROM projects ORDER BY position')]
+        projects = db.list_projects(conn)
     return jsonify({'projects': projects})
 
 
@@ -768,7 +784,6 @@ def create_project():
     data = request.get_json() or {}
     name = (data.get('name') or '').strip()
     color = data.get('color')
-    position = _int_or_none(data.get('position'))
     if not name:
         return jsonify({'error': 'name required'}), 400
 
@@ -778,13 +793,11 @@ def create_project():
             return jsonify({'error': 'project name must be unique'}), 400
         if not color:
             color = _generate_unique_color(conn)
-        conn.execute('INSERT INTO projects (name, color, position) VALUES (?,?,?)', (name, color, len(names)))
-        if position is None or position >= len(names):
-            names.append(name)
-        else:
-            names.insert(max(0, position), name)
-        db.place_projects(conn, names)
-    return jsonify({'name': name, 'color': color}), 201
+        conn.execute('INSERT INTO projects (name, color, repo_path, repo_url, notes, links) '
+                     'VALUES (?,?,?,?,?,?)',
+                     (name, color) + db.project_values(_project_extras(data)))
+        project = _find_project(conn, name)
+    return jsonify(project), 201
 
 
 @app.route('/api/project/<int:project_idx>', methods=['PUT'])
@@ -792,7 +805,6 @@ def update_project(project_idx):
     data = request.get_json() or {}
     name = data.get('name')
     color = data.get('color')
-    position = _int_or_none(data.get('position'))
 
     with db.write() as conn:
         names = db.project_names(conn)
@@ -816,10 +828,12 @@ def update_project(project_idx):
             conn.execute('UPDATE projects SET color = ? WHERE name = ?', (color, current))
             conn.execute('UPDATE cards SET color = ? WHERE project = ?', (color or DEFAULT_CARD_COLOR, current))
 
-        if position is not None:
-            names.pop(project_idx)
-            names.insert(min(max(0, position), len(names)), current)
-            db.place_projects(conn, names)
+        extras = _project_extras(data, only_present=True)
+        if extras:
+            merged = dict(_find_project(conn, current), **extras)
+            conn.execute('UPDATE projects SET repo_path = ?, repo_url = ?, notes = ?, links = ? WHERE name = ?',
+                         db.project_values(merged) + (current,))
+
         project = _find_project(conn, current)
     return jsonify(project)
 
@@ -830,10 +844,9 @@ def delete_project(project_idx):
         names = db.project_names(conn)
         if project_idx < 0 or project_idx >= len(names):
             return jsonify({'error': 'project not found'}), 404
-        removed = names.pop(project_idx)
+        removed = names[project_idx]
         conn.execute('UPDATE cards SET project = NULL, color = ? WHERE project = ?', (DEFAULT_CARD_COLOR, removed))
         conn.execute('DELETE FROM projects WHERE name = ?', (removed,))
-        db.place_projects(conn, names)
     return jsonify({'deleted': True})
 
 
