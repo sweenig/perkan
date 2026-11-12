@@ -987,6 +987,32 @@ document.getElementById('addLinkRowBtn').addEventListener('click', () => {
     container.appendChild(createLinkRowElement({}));
   }
 });
+// 268 -> "4 h 28 m", 0 -> "< 1 min", 1500 -> "1 d 1 h"
+function fmtDuration(min){
+  if(min < 1) return '< 1 min';
+  const d = Math.floor(min / 1440), h = Math.floor((min % 1440) / 60), m = min % 60;
+  if(d) return h ? `${d} d ${h} h` : `${d} d`;
+  if(h) return m ? `${h} h ${m} m` : `${h} h`;
+  return `${m} m`;
+}
+
+// "Time in each column": wall-clock time per column from the card's history (not active effort)
+function timeInColumnsHtml(t){
+  if(!t) return '';
+  if(!t.known){
+    return '<div class="timeline-times"><small class="link-hint">Time in each column is unknown: no recorded column history.</small></div>';
+  }
+  const hasWork = t.columns.some(c => c.counts_as_work);
+  const rows = t.columns.map(c =>
+    `<li><span class="tt-col">${escapeHtml(c.title)}${c.counts_as_work ? ' <span class="tt-work" title="Counts as work">work</span>' : ''}</span>` +
+    `<span class="tt-val">${fmtDuration(c.minutes)}${c.stays > 1 ? ` <span class="tt-stays">(${c.stays} stays)</span>` : ''}</span></li>`).join('');
+  return `<div class="timeline-times">
+      <div class="timeline-subheader">Time in each column <span class="tt-note">wall-clock, up to now</span></div>
+      <ul class="timeline-time-list">${rows}</ul>
+      ${hasWork ? `<div class="timeline-dates"><span>Time spent on work: <b>${fmtDuration(t.work_minutes)}</b></span></div>` : ''}
+    </div>`;
+}
+
 async function renderCardTimeline(card, isNew){
   const box = document.getElementById('editCardTimeline');
   box.style.display = 'none';
@@ -1011,6 +1037,7 @@ async function renderCardTimeline(card, isNew){
         <span>Completed: <b>${h.completed_at ? fmtDay(h.completed_at) : '—'}</b></span>
       </div>
       ${h.column_since ? `<div class="timeline-dates"><span>In ${name(h.column)} since <b>${fmtDay(h.column_since)}</b></span></div>` : ''}
+      ${timeInColumnsHtml(h.time_in_columns)}
       ${rows ? `<ul class="timeline-list">${rows}</ul>` : '<small class="link-hint">No column changes recorded yet.</small>'}`;
     box.style.display = '';
   } catch(err) { /* history is informational; the modal works without it */ }

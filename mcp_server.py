@@ -258,7 +258,11 @@ TOOLS = [
                          "source), plus created_at, started_at, completed_at and column_since. started_at is the first move to another "
                          "column; completed_at is when the card last entered a done column (absent while it "
                          "is outside every done column). Cards also carry started_at/completed_at in "
-                         "list_cards and get_board.", _obj({'id': _STR}, ['id']), _tool_get_card_history),
+                         "list_cards and get_board. time_in_columns gives the total wall-clock minutes the card spent in each column it "
+                         "has been in (repeated stays summed, the current column counting up to now; not active effort), "
+                         "with stays and counts_as_work per column and work_minutes, the sum over columns marked Counts as "
+                         "work. It is {known: false, reason} for cards with no recorded column history, never zeros.",
+     _obj({'id': _STR}, ['id']), _tool_get_card_history),
     ('get_card_stats', 'Durations in days per card plus summaries (n, avg, median, min, max). backlog_days = '
                        'created to started; work_days = started to completed; lead_days = created to completed; '
                        'in_column_days = time in the current column for cards not in a done column '

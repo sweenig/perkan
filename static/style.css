@@ -247,6 +247,15 @@ body.list-view-page{min-height:100vh}
 .timeline-list li{padding:2px 0}
 .timeline-list .tl-at{color:#9a9eab;margin-right:6px;font-variant-numeric:tabular-nums}
 .timeline-list .tl-src{margin-left:8px;color:#8a8e9b;font-size:11px}
+/* time in each column, inside the card modal's timeline */
+.timeline-times{margin:6px 0}
+.timeline-subheader{font-size:13px;font-weight:600;margin-bottom:2px}
+.timeline-subheader .tt-note{font-weight:400;font-size:11px;color:#8a8e9b;margin-left:6px}
+.timeline-time-list{list-style:none;margin:0 0 6px;padding:0;font-size:12px}
+.timeline-time-list li{display:flex;justify-content:space-between;gap:12px;padding:2px 0;border-bottom:1px solid rgba(128,128,128,0.15)}
+.timeline-time-list .tt-val{font-variant-numeric:tabular-nums}
+.timeline-time-list .tt-stays{color:#8a8e9b;font-size:11px}
+.timeline-time-list .tt-work{margin-left:6px;padding:0 6px;border-radius:8px;font-size:10px;color:#b78ef5;border:1px solid #3a3a4d}
 .card .card-age{font-size:12px;color:#c4c7d0;background:rgba(255,255,255,0.08);padding:2px 8px;border-radius:14px;font-weight:600;white-space:nowrap}
 .card .card-links + .card-age{margin-left:6px}
 /* Settings page */
