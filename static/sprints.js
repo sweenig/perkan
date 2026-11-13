@@ -220,14 +220,21 @@ function listFor(box, items, sprintId, closed) {
 function cardRow(card, closed) {
   const li = el('li', 'sp-card' + (isDone(card) ? ' sp-done' : ''));
   li.dataset.id = card.id;
-  li.style.setProperty('--card-color', readableOnDark(card.color || '#999', 3));
   li.append(el('span', 'sp-card-title', card.title));
   if (card.added_after_start) {
     const badge = el('span', 'sp-pill sp-added', '+ added mid-sprint');
     badge.title = 'Added to this sprint after it started' + (card.added_to_sprint_at ? ' (' + card.added_to_sprint_at + ')' : '');
     li.appendChild(badge);
   }
-  if (card.project) li.appendChild(el('span', 'sp-pill', card.project));
+  if (card.project) {
+    // The project colour lives on the pill, next to the name, the same way the status pill carries its column colour.
+    const proj = state.projects.find((p) => p.name === card.project);
+    const color = (proj && proj.color) || card.color || '#888';
+    const pill = el('span', 'sp-pill sp-project', card.project);
+    pill.style.background = color;
+    pill.style.color = pillTextColor(color);
+    li.appendChild(pill);
+  }
   if (card.assignee) li.appendChild(el('span', 'sp-assignee', card.assignee));
   const col = state.columns[card.column];
   if (col) {
