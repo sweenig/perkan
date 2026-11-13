@@ -311,22 +311,22 @@ TOOLS = [
      _obj({'end_date': _DATE, 'name': _STR, 'goal': _STR, 'start_date': _DATE, 'start': {'type': 'boolean'}},
           ['end_date']),
      _tool_create_sprint),
-    ('update_sprint', 'Rename a planned or active sprint, set its goal, or change its dates.',
+    ('update_sprint', 'Rename a planned or active sprint, set its goal, or change its dates. An empty start_date clears it on a planned sprint (an active sprint keeps one).',
      _obj({'id': _STR, 'name': _STR, 'goal': _STR, 'start_date': _DATE, 'end_date': _DATE}, ['id']),
      _tool_update_sprint),
     ('delete_sprint', 'Delete a sprint; its cards go back to the backlog.', _obj({'id': _STR}, ['id']),
      _tool_delete_sprint),
-    ('start_sprint', 'Start a planned sprint (start_date defaults to today). Only one sprint can be active.',
+    ('start_sprint', 'Start a planned sprint (start_date defaults to the date already set on the sprint, else today). Only one sprint can be active.',
      _obj({'id': _STR, 'start_date': _DATE}, ['id']), _tool_start_sprint),
     ('complete_sprint', 'Close the active sprint. unfinished (cards not in a done column): carry_over (default) '
                         'moves them to the next sprint keeping their column; backlog takes them out of any sprint; '
                         'leave keeps them in the closed sprint. For carry_over the next sprint is next_sprint (a '
                         'planned sprint id) or a new one made from next_end_date (default: this sprint\'s end + 7 '
-                        'days) and next_name; start_next starts it. Done cards stay in the closed sprint and '
+                        'days), optional next_start_date and next_name; start_next starts it (on its start date if set, else today). Done cards stay in the closed sprint and '
                         'disappear from the board. Returns committed (the set at the start) / added (cards added mid-sprint) / completed / unfinished counts.',
      _obj({'id': _STR, 'unfinished': {'type': 'string', 'enum': ['carry_over', 'backlog', 'leave']},
            'next_sprint': dict(_STR, description='Id of a planned sprint to receive the unfinished cards.'),
-           'next_end_date': _DATE, 'next_name': _STR, 'start_next': {'type': 'boolean'}}, ['id']),
+           'next_end_date': _DATE, 'next_start_date': _DATE, 'next_name': _STR, 'start_next': {'type': 'boolean'}}, ['id']),
      _tool_complete_sprint),
     ('get_card_sprint_history', "A card's sprint changes, oldest first (from/to sprint ids, UTC time, source), "
                                 "plus its current sprint.", _obj({'id': _STR}, ['id']),

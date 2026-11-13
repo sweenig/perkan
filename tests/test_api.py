@@ -719,6 +719,28 @@ class SprintTests(Base):
         self.assertEqual(j['next_sprint']['end_date'], '2026-12-08')
         self.assertEqual(j['next_sprint']['state'], 'active')
 
+    def test_complete_next_start_date_is_kept_when_started(self):
+        a = self.mk('2026-12-01')
+        self.c.post('/api/sprint/%s/start' % a['id'])
+        self.c.put('/api/card/t1', json={'sprint': a['id']})
+        j = self.c.post('/api/sprint/%s/complete' % a['id'],
+                        json={'next_end_date': '2026-12-11', 'next_start_date': '2026-12-07', 'start_next': True}).get_json()
+        self.assertEqual(j['next_sprint']['start_date'], '2026-12-07')
+        self.assertEqual(j['next_sprint']['end_date'], '2026-12-11')
+        self.assertEqual(j['next_sprint']['state'], 'active')
+
+    def test_planned_sprint_start_date_survives_start(self):
+        a = self.c.post('/api/sprint', json={'end_date': '2026-12-11', 'start_date': '2026-12-07'}).get_json()
+        self.assertEqual(a['start_date'], '2026-12-07')
+        self.c.put('/api/sprint/%s' % a['id'], json={'start_date': '2026-12-08'})
+        j = self.c.post('/api/sprint/%s/start' % a['id']).get_json()
+        self.assertEqual(j['start_date'], '2026-12-08')
+
+    def test_active_sprint_cannot_lose_its_start_date(self):
+        a = self.mk('2026-12-01')
+        self.c.post('/api/sprint/%s/start' % a['id'])
+        self.assertEqual(self.c.put('/api/sprint/%s' % a['id'], json={'start_date': ''}).status_code, 400)
+
     def test_complete_into_existing_planned_sprint(self):
         a, b = self.mk('2026-12-01'), self.mk('2026-12-08')
         self.c.post('/api/sprint/%s/start' % a['id'])

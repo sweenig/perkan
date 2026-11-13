@@ -369,6 +369,7 @@ function openSprintDialog(sprint) {
   editingSprint = sprint || null;
   $('sprintDialogTitle').textContent = sprint ? `Edit ${sprint.name}` : 'New sprint';
   $('spSave').textContent = sprint ? 'Save' : 'Create';
+  $('spBegin').value = sprint && sprint.start_date ? sprint.start_date : '';
   $('spEnd').value = sprint ? sprint.end_date : addDays(state.today, 6);   // a 7-day sprint counting today
   $('spName').value = sprint ? sprint.name : '';
   $('spGoal').value = sprint ? sprint.goal : '';
@@ -382,7 +383,7 @@ document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('cli
 
 $('sprintForm').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const body = { end_date: $('spEnd').value, name: $('spName').value.trim(), goal: $('spGoal').value.trim() };
+  const body = { start_date: $('spBegin').value, end_date: $('spEnd').value, name: $('spName').value.trim(), goal: $('spGoal').value.trim() };
   try {
     if (editingSprint) await api('PUT', `/api/sprint/${editingSprint.id}`, Object.assign(body, { name: body.name || editingSprint.name }));
     else await api('POST', '/api/sprint', body);
@@ -407,6 +408,7 @@ function openComplete(sprint, items) {
   $('completeTitle').textContent = `Complete ${sprint.name}`;
   $('completeSummary').textContent = `${items.length} cards: ${items.length - unfinished} done, ${unfinished} unfinished.`;
   $('cpEnd').value = addDays(sprint.end_date, 7);
+  $('cpBegin').value = '';
   const planned = state.sprints.filter((s) => s.state === 'planned');
   $('cpExisting').replaceChildren(...planned.map((s) => {
     const o = el('option', '', `${s.name} (ends ${fmtDate(s.end_date)})`);
@@ -437,7 +439,10 @@ $('completeForm').addEventListener('submit', async (e) => {
   const body = { unfinished };
   if (unfinished === 'carry_over' && completingUnfinished > 0) {
     if (document.querySelector('input[name=carryTo]:checked').value === 'existing') body.next_sprint = $('cpExisting').value;
-    else body.next_end_date = $('cpEnd').value;
+    else {
+      body.next_end_date = $('cpEnd').value;
+      if ($('cpBegin').value) body.next_start_date = $('cpBegin').value;
+    }
     body.start_next = $('cpStart').checked;
   }
   try {

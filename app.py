@@ -795,6 +795,7 @@ def complete_sprint(sprint_id):
         result = db.complete_sprint(
             conn, sprint_id, unfinished=data.get('unfinished') or 'carry_over',
             next_sprint=data.get('next_sprint') or None, next_end_date=data.get('next_end_date') or None,
+            next_start_date=data.get('next_start_date') or None,
             next_name=data.get('next_name') or None, start_next=_truthy(data.get('start_next', False)),
             source=_source())
     return jsonify(result)

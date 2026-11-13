@@ -1035,6 +1035,8 @@ def update_sprint(conn, sprint_id, **fields):
             _check_date(new[key], key)
     start = new.get('start_date', row['start_date'])
     end = new.get('end_date', row['end_date'])
+    if row['state'] == 'active' and not start:
+        raise SprintError('an active sprint needs a start date')
     if start and start > end:
         raise SprintError('start_date is after end_date')
     for key in ('name', 'goal', 'start_date', 'end_date'):
@@ -1082,7 +1084,7 @@ def card_sprint_history(conn, card_id):
             for r in conn.execute('SELECT * FROM card_sprint_history WHERE card_id = ? ORDER BY id', (card_id,))]
 
 
-def complete_sprint(conn, sprint_id, unfinished='carry_over', next_sprint=None, next_end_date=None,
+def complete_sprint(conn, sprint_id, unfinished='carry_over', next_sprint=None, next_end_date=None, next_start_date=None,
                     next_name=None, start_next=False, source='api'):
     """Close the active sprint in one go.
 
@@ -1101,8 +1103,8 @@ def complete_sprint(conn, sprint_id, unfinished='carry_over', next_sprint=None, 
         raise SprintError('sprint not found', 404)
     if row['state'] != 'active':
         raise SprintError(f"only the active sprint can be completed (this one is {row['state']})")
-    if unfinished != 'carry_over' and (next_sprint or next_end_date or next_name or start_next):
-        raise SprintError('next_sprint, next_end_date, next_name and start_next only apply to carry_over')
+    if unfinished != 'carry_over' and (next_sprint or next_end_date or next_start_date or next_name or start_next):
+        raise SprintError('next_sprint, next_end_date, next_start_date, next_name and start_next only apply to carry_over')
 
     cards = conn.execute(
         'SELECT cards.id, columns.is_done AS d FROM cards JOIN columns ON columns.id = cards.column_id '
@@ -1118,9 +1120,9 @@ def complete_sprint(conn, sprint_id, unfinished='carry_over', next_sprint=None, 
                 raise SprintError('next_sprint not found', 404)
             if conn.execute('SELECT state FROM sprints WHERE id = ?', (target,)).fetchone()['state'] != 'planned':
                 raise SprintError('next_sprint must be a planned sprint')
-        elif open_ids or start_next or next_end_date or next_name:
+        elif open_ids or start_next or next_end_date or next_start_date or next_name:
             end = next_end_date or (_check_date(row['end_date'], 'end_date') + timedelta(days=7)).strftime('%Y-%m-%d')
-            target = create_sprint(conn, end, name=next_name)
+            target = create_sprint(conn, end, name=next_name, start_date=next_start_date)
 
     added_n = mid_sprint_additions(conn, by_sprint=True).get(sprint_id, 0)
     now = now_iso()
