@@ -522,6 +522,7 @@ function renderProjectFilters(board, projectMap){
 }
 
 async function render(options = {}){
+  if(!document.getElementById('board')) return;   // the sprints and list pages reuse this file's dialogs, not the board
   const useLatest = !!options.useLatest;
   const board = useLatest && latestBoard ? latestBoard : await fetchBoard();
   const boardEl = document.getElementById('board');
@@ -1102,6 +1103,7 @@ function closeCardEditModal(){
     modalContent.style.backgroundColor = '';
   }
   modal.classList.add('hidden');
+  document.dispatchEvent(new Event('cardEditClosed'));   // pages without a board (sprints) reload on this
 }
 
 document.getElementById('editCardCancelBtn').addEventListener('click', ()=>{ closeCardEditModal(); });
