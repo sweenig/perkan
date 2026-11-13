@@ -28,7 +28,7 @@ async function load() {
   state.today = sp.today;
   state.columns = Object.fromEntries(cols.columns.map((c) => [c.id, c]));
   state.cards = cards.cards;
-  render();
+  renderSprints();
 }
 
 // ---------------------------------------------------------------- helpers
@@ -80,8 +80,8 @@ const isDone = (card) => !!(state.columns[card.column] || {}).is_done;
 
 // ---------------------------------------------------------------- rendering
 
-function render() {
-  renderProjectFilters();
+function renderSprints() {
+  renderSprintFilters();
   const main = $('sprintsMain');
   main.replaceChildren();
   const active = state.sprints.find((s) => s.state === 'active');
@@ -106,7 +106,7 @@ function safeColor(c) {
 }
 
 // Same pills as the board and list pages: one per project with its card count; click toggles the filter.
-function renderProjectFilters() {
+function renderSprintFilters() {
   const box = $('projectFilters');
   const counts = new Map();
   const closedIds = new Set(state.sprints.filter((s) => s.state === 'closed').map((s) => s.id));
@@ -134,7 +134,7 @@ function renderProjectFilters() {
     const dot = el('span', 'project-filter-pill-dot');
     dot.style.backgroundColor = readableOnDark(safeColor(colors[name]), 3);
     b.append(dot, el('span', 'project-filter-pill-label', `${name} (${counts.get(name)})`));
-    b.addEventListener('click', () => { state.project = state.project === name ? null : name; render(); });
+    b.addEventListener('click', () => { state.project = state.project === name ? null : name; renderSprints(); });
     box.appendChild(b);
   });
 }
@@ -220,14 +220,21 @@ function listFor(box, items, sprintId, closed) {
 function cardRow(card, closed) {
   const li = el('li', 'sp-card' + (isDone(card) ? ' sp-done' : ''));
   li.dataset.id = card.id;
-  li.style.setProperty('--card-color', readableOnDark(card.color || '#999', 3));
   li.append(el('span', 'sp-card-title', card.title));
   if (card.added_after_start) {
     const badge = el('span', 'sp-pill sp-added', '+ added mid-sprint');
     badge.title = 'Added to this sprint after it started' + (card.added_to_sprint_at ? ' (' + card.added_to_sprint_at + ')' : '');
     li.appendChild(badge);
   }
-  if (card.project) li.appendChild(el('span', 'sp-pill', card.project));
+  if (card.project) {
+    // The project colour lives on the pill, next to the name, the same way the status pill carries its column colour.
+    const proj = state.projects.find((p) => p.name === card.project);
+    const color = (proj && proj.color) || card.color || '#888';
+    const pill = el('span', 'sp-pill sp-project', card.project);
+    pill.style.background = color;
+    pill.style.color = pillTextColor(color);
+    li.appendChild(pill);
+  }
   if (card.assignee) li.appendChild(el('span', 'sp-assignee', card.assignee));
   const col = state.columns[card.column];
   if (col) {
@@ -236,6 +243,13 @@ function cardRow(card, closed) {
     pill.style.color = pillTextColor(col.color || '#888');
     li.appendChild(pill);
   }
+  // The full edit dialog is the board's own (built by app.js), so every field and button matches it.
+  const edit = el('button', 'sp-edit', '✎');
+  edit.type = 'button';
+  edit.title = 'Edit card';
+  edit.setAttribute('aria-label', `Edit card: ${card.title}`);
+  edit.addEventListener('click', () => openCardEditModal(card));
+  li.appendChild(edit);
   if (!closed) {
     li.draggable = true;
     li.addEventListener('dragstart', (e) => {
@@ -378,7 +392,9 @@ function openSprintDialog(sprint) {
 }
 
 $('newSprintBtn').addEventListener('click', () => openSprintDialog(null));
-$('showClosed').addEventListener('change', (e) => { state.showClosed = e.target.checked; render(); });
+// app.js closes its edit dialog after save, delete, duplicate or cancel; reload so the rows show the result.
+document.addEventListener('cardEditClosed', () => load());
+$('showClosed').addEventListener('change', (e) => { state.showClosed = e.target.checked; renderSprints(); });
 document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => b.closest('dialog').close()));
 
 $('sprintForm').addEventListener('submit', async (e) => {
