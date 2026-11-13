@@ -25,7 +25,7 @@ DATA_DIR = os.environ.get('PERKAN_DATA_DIR') or os.path.join(os.path.dirname(__f
 DB_FILE = os.path.join(DATA_DIR, 'perkan.db')
 LEGACY_JSON = os.path.join(DATA_DIR, 'kanban.json')
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 ORDER_STEP = 1_000_000.0
 MIN_GAP = 1e-3   # below this, neighbouring order values are renumbered to make room
 
@@ -102,6 +102,16 @@ CREATE TABLE IF NOT EXISTS card_sprint_history (
     source      TEXT NOT NULL DEFAULT 'api'
 );
 CREATE INDEX IF NOT EXISTS idx_card_sprint_history_card ON card_sprint_history(card_id, id);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS holidays (
+    date  TEXT PRIMARY KEY,
+    label TEXT NOT NULL DEFAULT ''
+);
 """
 
 
@@ -823,6 +833,134 @@ def _midnight(d, zone):
     return datetime(d.year, d.month, d.day, tzinfo=zone).astimezone(timezone.utc)
 
 
+# --- working calendar -------------------------------------------------------------------------------------
+# App-wide: which weekdays and hours count as working time, plus a list of holidays (whole days off).
+# It only decides what the burn-up shows; time spent is counted the same either way.
+
+WEEKDAYS = ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun')
+
+
+def _default_week():
+    return [{'day': d, 'on': i < 5, 'start': '00:00', 'end': '24:00'} for i, d in enumerate(WEEKDAYS)]
+
+
+def _hhmm_minutes(value, what):
+    """Minutes since midnight for 'HH:MM' ('24:00' is allowed as an end of day)."""
+    m = re.fullmatch(r'(\d{1,2}):(\d{2})', value) if isinstance(value, str) else None
+    if m is None or int(m.group(2)) > 59 or int(m.group(1)) > 24 or (int(m.group(1)) == 24 and int(m.group(2))):
+        raise SprintError('%s must be a time like 08:30 (or 24:00 for the end of the day)' % what)
+    return int(m.group(1)) * 60 + int(m.group(2))
+
+
+def _clean_week(week):
+    """Validate a 7-entry week (Monday first) and return it normalized."""
+    if not isinstance(week, list) or len(week) != 7:
+        raise SprintError('week must list the 7 days, Monday first')
+    out = []
+    for i, entry in enumerate(week):
+        if not isinstance(entry, dict):
+            raise SprintError('each day in week must be an object')
+        start = entry.get('start', '00:00')
+        end = entry.get('end', '24:00')
+        a, b = _hhmm_minutes(start, '%s start' % WEEKDAYS[i]), _hhmm_minutes(end, '%s end' % WEEKDAYS[i])
+        if a >= b:
+            raise SprintError('%s: start must be before end' % WEEKDAYS[i])
+        out.append({'day': WEEKDAYS[i], 'on': is_true(entry.get('on')), 'start': '%02d:%02d' % divmod(a, 60),
+                    'end': '%02d:%02d' % divmod(b, 60)})
+    return out
+
+
+def is_true(value):
+    """Booleans from JSON or from clients that send strings."""
+    if isinstance(value, str):
+        return value.strip().lower() in ('1', 'true', 'yes', 'on')
+    return bool(value)
+
+
+def get_calendar(conn):
+    """{'week': [{day, on, start, end} x7, Monday first], 'hide_non_working': bool}. Defaults to Mon-Fri,
+    00:00-24:00, nothing hidden, so nothing changes until the settings are used."""
+    out = {'week': _default_week(), 'hide_non_working': False}
+    row = conn.execute("SELECT value FROM settings WHERE key = 'working_calendar'").fetchone()
+    if row:
+        try:
+            saved = json.loads(row['value'])
+            out['week'] = _clean_week(saved['week'])
+            out['hide_non_working'] = bool(saved.get('hide_non_working'))
+        except (ValueError, KeyError, TypeError):
+            logger.warning('Ignoring unreadable working_calendar setting')
+    return out
+
+
+def set_calendar(conn, week=None, hide_non_working=None):
+    """Save the working week and/or the hide-by-default flag (whichever is given); returns get_calendar."""
+    cur = get_calendar(conn)
+    if week is not None:
+        cur['week'] = _clean_week(week)
+    if hide_non_working is not None:
+        cur['hide_non_working'] = is_true(hide_non_working)
+    conn.execute("INSERT INTO settings (key, value) VALUES ('working_calendar', ?) "
+                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (json.dumps(cur),))
+    return cur
+
+
+def list_holidays(conn):
+    return [{'date': r['date'], 'label': r['label']} for r in conn.execute('SELECT date, label FROM holidays ORDER BY date')]
+
+
+MAX_HOLIDAY_RANGE_DAYS = 366
+
+
+def holiday_range(start, end=None):
+    """The yyyy-mm-dd dates from start to end, both included; just start when end is empty."""
+    try:
+        a = datetime.strptime(start, '%Y-%m-%d').date()
+        b = datetime.strptime(end, '%Y-%m-%d').date() if end else a
+    except (ValueError, TypeError):
+        raise SprintError('dates must look like yyyy-mm-dd')
+    if b < a:
+        raise SprintError('the end date is before the start date')
+    if (b - a).days >= MAX_HOLIDAY_RANGE_DAYS:
+        raise SprintError('a range can cover at most %d days' % MAX_HOLIDAY_RANGE_DAYS)
+    return [(a + timedelta(days=i)).isoformat() for i in range((b - a).days + 1)]
+
+
+def parse_holiday_text(text):
+    """[(date, label)] from text with one entry per line: 'yyyy-mm-dd' or a range 'yyyy-mm-dd..yyyy-mm-dd'
+    (both days included), optionally followed by a label that every day of a range shares.
+    Blank lines and lines starting with # are skipped. Raises SprintError naming every bad line."""
+    found, bad = [], []
+    for n, line in enumerate((text or '').splitlines(), 1):
+        line = line.strip().lstrip('\ufeff')
+        if not line or line.startswith('#'):
+            continue
+        m = re.match(r'(\d{4}-\d{2}-\d{2})(?:\.\.(\d{4}-\d{2}-\d{2}))?(?:[\s,;]+(.*))?$', line)
+        try:
+            if m is None:
+                raise ValueError
+            days = holiday_range(m.group(1), m.group(2))
+        except (ValueError, SprintError):
+            bad.append('line %d (%s)' % (n, line[:40]))
+            continue
+        found.extend((d, (m.group(3) or '').strip().strip('"')) for d in days)
+    if bad:
+        raise SprintError('Not a yyyy-mm-dd date or range (yyyy-mm-dd..yyyy-mm-dd, end not before start): ' + ', '.join(bad[:5]) + (' and %d more' % (len(bad) - 5) if len(bad) > 5 else ''))
+    return found
+
+
+def add_holidays(conn, entries):
+    """Add (date, label) pairs; a date already listed gets its label replaced. Returns how many were given."""
+    for date, label in entries:
+        conn.execute('INSERT INTO holidays (date, label) VALUES (?, ?) '
+                     'ON CONFLICT(date) DO UPDATE SET label = excluded.label', (date, label))
+    return len(entries)
+
+
+def delete_holiday(conn, date):
+    if conn.execute('DELETE FROM holidays WHERE date = ?', (date,)).rowcount == 0:
+        raise SprintError('holiday not found', 404)
+
+
 def _stays(hist, now):
     """[(column_id, start, end)] for one card from its history rows (dicts with to_column, at, source), oldest
     first: each stay runs from the move into the column to the next move, and the last one to `now`.
@@ -867,7 +1005,7 @@ def _overlap_minutes(segments, lo, hi):
     return total
 
 
-def sprint_burnup(conn, sprint_id, now=None, step='day'):
+def sprint_burnup(conn, sprint_id, now=None, step='day', hide_non_working=None):
     """Cumulative minutes spent on a sprint's cards, per day, for the burn-up page.
 
     Time spent = wall-clock time a card sat in a column marked counts_as_work, counted only while the card
@@ -880,6 +1018,14 @@ def sprint_burnup(conn, sprint_id, now=None, step='day'):
     of the first day). Either way there is an origin point and, while the sprint runs, a last point at
     `now`. Every point carries `local`, its wall-clock time in PERKAN_TZ; `day_edges` are the local
     midnights (UTC) that bound each day, so a client can place points exactly.
+
+    hide_non_working (default: the saved setting) leaves non-working time off the x-axis: days that are off in
+    the working week or listed as holidays, and, in the hourly view, the hours outside that weekday's working
+    hours. Time tracked in hidden stretches is not lost: it is already in the cumulative minutes of the next
+    point, so total_minutes and the per-card minutes are identical either way. `bands` always lists the
+    stretches the x-axis shows, one per day: {day, start, end} (UTC); day_edges are their starts plus the last end.
+    While non-working time is shown, `non_working` lists its stretches as {start, end} (UTC), merged, so the page
+    can shade them: whole non-working days, plus, in the hourly view, the hours outside working hours.
     """
     if step not in ('day', 'hour'):
         raise SprintError("step must be 'day' or 'hour'")
@@ -888,13 +1034,17 @@ def sprint_burnup(conn, sprint_id, now=None, step='day'):
         raise SprintError('sprint not found', 404)
     now = now or datetime.now(timezone.utc)
     zone = _local_zone()
+    calendar = get_calendar(conn)
+    hide = calendar['hide_non_working'] if hide_non_working is None else is_true(hide_non_working)
+    holidays = {r['date'] for r in conn.execute('SELECT date FROM holidays')}
     work_cols = [r['id'] for r in conn.execute('SELECT id FROM columns WHERE counts_as_work = 1 ORDER BY position')]
     out = {'sprint': {'id': row['id'], 'name': row['name'], 'state': row['state'],
                       'start_date': row['start_date'], 'end_date': row['end_date']},
            'work_columns': [{'id': r['id'], 'title': r['title']} for r in conn.execute(
                'SELECT id, title FROM columns WHERE counts_as_work = 1 ORDER BY position')],
            'unit': 'minutes', 'step': step, 'tz': getattr(zone, 'key', 'UTC'), 'as_of': _iso(now),
-           'days': [], 'day_edges': [], 'points': [], 'total_minutes': 0,
+           'hide_non_working': hide, 'hidden_days': 0, 'non_working': [],
+           'days': [], 'day_edges': [], 'bands': [], 'points': [], 'total_minutes': 0,
            'cards': [], 'unknown': [], 'notes': []}
     if not row['start_date']:
         out['notes'].append('This sprint has no start date yet (it starts when it is started).')
@@ -902,9 +1052,52 @@ def sprint_burnup(conn, sprint_id, now=None, step='day'):
     start_d = datetime.strptime(row['start_date'], '%Y-%m-%d').date()
     end_d = datetime.strptime(row['end_date'], '%Y-%m-%d').date()
     n_days = (end_d - start_d).days + 1
-    days = [start_d + timedelta(days=i) for i in range(n_days)]
+    all_days = [start_d + timedelta(days=i) for i in range(n_days)]
+
+    def is_working(d):
+        return calendar['week'][d.weekday()]['on'] and d.isoformat() not in holidays
+
+    def band(d):
+        """The stretch of local day `d` the x-axis shows, as (start, end) UTC datetimes."""
+        if hide and step == 'hour':
+            w = calendar['week'][d.weekday()]
+            a, b = _hhmm_minutes(w['start'], ''), _hhmm_minutes(w['end'], '')
+            return (_midnight(d, zone) + timedelta(minutes=a) if a else _midnight(d, zone),
+                    _midnight(d + timedelta(days=1), zone) if b == 1440 else _midnight(d, zone) + timedelta(minutes=b))
+        return _midnight(d, zone), _midnight(d + timedelta(days=1), zone)
+
+    days = [d for d in all_days if not hide or is_working(d)]
+    out['hidden_days'] = len(all_days) - len(days)
+    if not days:
+        out['notes'].append('Every day of this sprint is non-working, so there is nothing to show with non-working '
+                            'time hidden. Show non-working time, or change the working days in Settings > Working time.')
+        days, hide, out['hide_non_working'] = all_days, False, False
+        out['hidden_days'] = 0
+    bands = [band(d) for d in days]
     out['days'] = [d.isoformat() for d in days]
-    out['day_edges'] = [_iso(_midnight(start_d + timedelta(days=i), zone)) for i in range(n_days + 1)]
+    out['bands'] = [{'day': d.isoformat(), 'start': _iso(a), 'end': _iso(b)} for d, (a, b) in zip(days, bands)]
+    out['day_edges'] = [_iso(a) for a, _ in bands] + [_iso(bands[-1][1])]
+    if not hide:
+        quiet = []
+        for d, (a, b) in zip(days, bands):
+            if not is_working(d):
+                quiet.append((a, b))
+            elif step == 'hour':
+                w = calendar['week'][d.weekday()]
+                lo, hi = _midnight(d, zone) + timedelta(minutes=_hhmm_minutes(w['start'], '')), _midnight(d, zone) + timedelta(minutes=_hhmm_minutes(w['end'], ''))
+                if hi >= b:
+                    hi = b
+                if lo > a:
+                    quiet.append((a, lo))
+                if hi < b:
+                    quiet.append((hi, b))
+        merged = []
+        for a, b in quiet:
+            if merged and merged[-1][1] == a:
+                merged[-1] = (merged[-1][0], b)
+            else:
+                merged.append((a, b))
+        out['non_working'] = [{'start': _iso(a), 'end': _iso(b)} for a, b in merged]
     window_start = _midnight(start_d, zone)
     window_end = _midnight(end_d + timedelta(days=1), zone)
     stop = min(now, window_end)
@@ -969,23 +1162,34 @@ def sprint_burnup(conn, sprint_id, now=None, step='day'):
         return {'at': _iso(at), 'local': local.strftime('%Y-%m-%dT%H:%M'), 'day': day or local.strftime('%Y-%m-%d'),
                 'kind': kind, 'minutes': round(_overlap_minutes(all_segments, window_start, at))}
 
-    points = [point(window_start, 'start', days[0].isoformat())]
+    def closing(at):
+        return 'end' if at >= window_end else ('now' if row['state'] == 'active' else 'closed')
+
+    points = [point(bands[0][0], 'start', days[0].isoformat())]
     if step == 'day':
-        for d in days:
-            day_end = _midnight(d + timedelta(days=1), zone)
-            if day_end <= stop:
-                p = point(day_end, 'day_end', d.isoformat())      # labelled with the day it closes
-                points.append(p)
-            elif _midnight(d, zone) < stop:
+        for d, (a, b) in zip(days, bands):
+            if b <= stop:
+                points.append(point(b, 'day_end', d.isoformat()))      # labelled with the day it closes
+            elif a < stop:
                 points.append(point(stop, 'now' if row['state'] == 'active' else 'closed', d.isoformat()))
                 break
     else:
-        t = window_start + timedelta(hours=1)
-        while t < stop:
-            points.append(point(t, 'hour'))
-            t += timedelta(hours=1)
-        if stop > window_start:
-            points.append(point(stop, 'end' if stop >= window_end else ('now' if row['state'] == 'active' else 'closed')))
+        def add(p):
+            if not points or points[-1]['at'] != p['at']:      # neighbouring bands can share an edge
+                points.append(p)
+
+        for a, b in bands:
+            if a >= stop:
+                break
+            add(point(a, 'hour'))                               # where this band begins
+            t = a + timedelta(minutes=(60 - a.astimezone(zone).minute) % 60 or 60)   # next whole local hour
+            while t < min(b, stop):
+                add(point(t, 'hour'))
+                t += timedelta(hours=1)
+            if b < stop:
+                add(point(b, 'hour'))
+        if stop > bands[0][0]:
+            add(point(stop, closing(stop)))
     out['points'] = points
     out['total_minutes'] = points[-1]['minutes']
     return out
@@ -1348,6 +1552,13 @@ def _migrate_11_to_12(conn):
     logger.info('Migrated schema v11 -> v12: added columns.counts_as_work')
 
 
+def _migrate_12_to_13(conn):
+    """v13 adds the app-wide settings table and the holidays (non-working days) list for the working calendar."""
+    conn.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+    conn.execute("CREATE TABLE IF NOT EXISTS holidays (date TEXT PRIMARY KEY, label TEXT NOT NULL DEFAULT '')")
+    logger.info('Migrated schema v12 -> v13: added settings and holidays')
+
+
 def init(normalize, default_board):
     """Create or upgrade the database; on first run import kanban.json (or seed a blank board).
 
@@ -1369,7 +1580,7 @@ def init(normalize, default_board):
         version = conn.execute('PRAGMA user_version').fetchone()[0]
         if version >= SCHEMA_VERSION:
             return
-        if version in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11):
+        if version in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12):
             if version == 1:
                 _migrate_1_to_2(conn)
             if version <= 2:
@@ -1390,7 +1601,9 @@ def init(normalize, default_board):
                 _migrate_9_to_10(conn)
             if version <= 10:
                 _migrate_10_to_11(conn)
-            _migrate_11_to_12(conn)
+            if version <= 11:
+                _migrate_11_to_12(conn)
+            _migrate_12_to_13(conn)
         else:
             if os.path.exists(LEGACY_JSON):
                 with open(LEGACY_JSON, 'r', encoding='utf-8') as f:

@@ -751,17 +751,81 @@ def get_sprint(sprint_id):
 
 @app.route('/api/sprint/<sprint_id>/burnup', methods=['GET'])
 def sprint_burnup(sprint_id):
-    """Cumulative minutes spent on a sprint's cards (sprint id, or "active"); ?step=day (default) or hour.
-    See db.sprint_burnup."""
+    """Cumulative minutes spent on a sprint's cards (sprint id, or "active"); ?step=day (default) or hour;
+    ?hide_non_working=true|false overrides the saved setting. See db.sprint_burnup."""
     with db.read() as conn:
         if sprint_id == 'active':
             sprint_id = db.active_sprint(conn)
             if sprint_id is None:
                 return jsonify({'error': 'there is no active sprint'}), 404
         try:
-            return jsonify(db.sprint_burnup(conn, sprint_id, step=request.args.get('step') or 'day'))
+            hide = request.args.get('hide_non_working')
+            return jsonify(db.sprint_burnup(conn, sprint_id, step=request.args.get('step') or 'day',
+                                            hide_non_working=None if hide in (None, '') else hide))
         except db.SprintError as err:
             return jsonify({'error': str(err)}), err.status
+
+
+def _calendar_payload(conn):
+    out = db.get_calendar(conn)
+    out['holidays'] = db.list_holidays(conn)
+    return out
+
+
+@app.route('/api/settings/calendar', methods=['GET'])
+def get_calendar():
+    """The working calendar: week (7 days, Monday first, each {day, on, start, end}), hide_non_working, holidays."""
+    with db.read() as conn:
+        return jsonify(_calendar_payload(conn))
+
+
+@app.route('/api/settings/calendar', methods=['PUT'])
+def put_calendar():
+    """Body: week and/or hide_non_working (whichever is given is saved)."""
+    data = request.get_json() or {}
+    with db.write() as conn:
+        try:
+            db.set_calendar(conn, week=data.get('week'), hide_non_working=data.get('hide_non_working'))
+        except db.SprintError as err:
+            return jsonify({'error': str(err)}), err.status
+        return jsonify(_calendar_payload(conn))
+
+
+@app.route('/api/settings/holidays', methods=['POST'])
+def add_holidays():
+    """Body: any of text (one 'yyyy-mm-dd[..yyyy-mm-dd] [label]' per line, # comments allowed), dates (list of
+    yyyy-mm-dd), or start with an optional end (a range, both days included), with an optional label for the
+    dates and range. All or nothing: a bad line or range rejects the whole request."""
+    data = request.get_json() or {}
+    try:
+        entries = db.parse_holiday_text(data.get('text') or '')
+        label = (data.get('label') or '').strip()
+        entries += db.parse_holiday_text('\n'.join(str(d) for d in data.get('dates') or []))
+        if data.get('start'):
+            entries += [(d, '') for d in db.holiday_range(data['start'], data.get('end') or None)]
+        elif data.get('end'):
+            return jsonify({'error': 'give a start date with the end date'}), 400
+        if label:
+            entries = [(d, l or label) for d, l in entries]
+        if not entries:
+            return jsonify({'error': 'give at least one date (yyyy-mm-dd)'}), 400
+        with db.write() as conn:
+            added = db.add_holidays(conn, entries)
+            out = _calendar_payload(conn)
+    except db.SprintError as err:
+        return jsonify({'error': str(err)}), err.status
+    out['added'] = added
+    return jsonify(out), 201
+
+
+@app.route('/api/settings/holidays/<date>', methods=['DELETE'])
+def delete_holiday(date):
+    with db.write() as conn:
+        try:
+            db.delete_holiday(conn, date)
+        except db.SprintError as err:
+            return jsonify({'error': str(err)}), err.status
+        return jsonify(_calendar_payload(conn))
 
 
 @app.route('/api/sprint/<sprint_id>', methods=['PUT'])

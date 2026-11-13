@@ -1217,6 +1217,248 @@ class BurnupTests(Base):
         self.assertIn(b'/api/sprint/', self.c.get('/static/burnup.js').data)
 
 
+class WorkingCalendarTests(Base):
+    """The working calendar (days, hours, holidays) and the burn-up with non-working time hidden (times are UTC).
+
+    Sprint S runs Thu 2026-11-05 to Tue 2026-11-10 (so it holds a weekend); now is Tue 11-10 12:00.
+    One card sat in a work column from Fri 11-06 20:00 to Mon 11-09 08:00:
+      Fri 4 h + Sat 24 h + Sun 24 h + Mon 8 h = 240 + 1440 + 1440 + 480 = 3600 minutes, with or without hiding.
+    """
+    NOW = datetime.datetime(2026, 11, 10, 12, 0, tzinfo=datetime.timezone.utc)
+
+    def setUp(self):
+        super().setUp()
+        with db.write() as conn:
+            conn.execute('DELETE FROM settings')
+            conn.execute('DELETE FROM holidays')
+        self.c.put('/api/column/doing', json={'counts_as_work': True})
+        with db.write() as conn:
+            self.sid = db.create_sprint(conn, '2026-11-10', name='S', start_date='2026-11-05')
+            db.start_sprint(conn, self.sid, start_date='2026-11-05')
+        cid = self.post(title='X', column='todo')['id']
+        with db.write() as conn:
+            conn.execute('DELETE FROM card_history WHERE card_id = ?', (cid,))
+            prev = None
+            for col, at in (('todo', '2026-11-01T08:00:00Z'), ('doing', '2026-11-06T20:00:00Z'), ('todo', '2026-11-09T08:00:00Z')):
+                conn.execute('INSERT INTO card_history (card_id, from_column, to_column, at, source) VALUES (?,?,?,?,?)',
+                             (cid, prev, col, at, 'api'))
+                prev = col
+            conn.execute('DELETE FROM card_sprint_history WHERE card_id = ?', (cid,))
+            conn.execute('INSERT INTO card_sprint_history (card_id, from_sprint, to_sprint, at, source) VALUES (?,?,?,?,?)',
+                         (cid, None, self.sid, '2026-11-05T00:00:00Z', 'api'))
+            conn.execute('UPDATE cards SET sprint_id = ? WHERE id = ?', (self.sid, cid))
+
+    def burnup(self, **kw):
+        with db.read() as conn:
+            return db.sprint_burnup(conn, self.sid, now=self.NOW, **kw)
+
+    def save_week(self, **hours):
+        """Mon-Fri on with the given 'start'/'end' (default all day), Sat/Sun off."""
+        week = [{'day': d, 'on': i < 5, 'start': hours.get('start', '00:00'), 'end': hours.get('end', '24:00')}
+                for i, d in enumerate(db.WEEKDAYS)]
+        r = self.c.put('/api/settings/calendar', json={'week': week})
+        self.assertEqual(r.status_code, 200, r.data)
+
+    # settings
+    def test_defaults_change_nothing(self):
+        cal = self.get('/api/settings/calendar')
+        self.assertEqual([(d['day'], d['on'], d['start'], d['end']) for d in cal['week']],
+                         [(d, i < 5, '00:00', '24:00') for i, d in enumerate(db.WEEKDAYS)])
+        self.assertFalse(cal['hide_non_working'])
+        self.assertEqual(cal['holidays'], [])
+        out = self.burnup()
+        self.assertEqual(out['days'], ['2026-11-0%d' % d if d < 10 else '2026-11-%d' % d for d in range(5, 11)])
+        self.assertEqual(out['hidden_days'], 0)
+        self.assertEqual(out['total_minutes'], 3600)
+
+    def test_calendar_is_saved_and_validated(self):
+        self.save_week(start='08:30', end='17:00')
+        self.c.put('/api/settings/calendar', json={'hide_non_working': 'true'})       # string booleans from clients
+        cal = self.get('/api/settings/calendar')
+        self.assertTrue(cal['hide_non_working'])
+        self.assertEqual((cal['week'][0]['start'], cal['week'][0]['end'], cal['week'][5]['on']), ('08:30', '17:00', False))
+        for bad in ([], [{}] * 6, [dict(d, start='9am') for d in cal['week']], [dict(d, end='25:00') for d in cal['week']],
+                    [dict(d, start='17:00', end='08:00') for d in cal['week']]):
+            self.assertEqual(self.c.put('/api/settings/calendar', json={'week': bad}).status_code, 400, bad)
+        self.assertEqual(self.get('/api/settings/calendar')['week'][0]['start'], '08:30')   # a bad save changes nothing
+
+    def test_holidays_add_import_and_remove(self):
+        r = self.c.post('/api/settings/holidays', json={'dates': ['2026-12-25'], 'label': 'Christmas'})
+        self.assertEqual(r.status_code, 201)
+        text = '# 2026\n\n2026-11-26 Thanksgiving\n2027-01-01,"New Year"\n2026-12-25\n'
+        r = self.c.post('/api/settings/holidays', json={'text': text})
+        self.assertEqual((r.status_code, r.get_json()['added']), (201, 3))
+        got = {h['date']: h['label'] for h in self.get('/api/settings/calendar')['holidays']}
+        self.assertEqual(got, {'2026-11-26': 'Thanksgiving', '2026-12-25': '', '2027-01-01': 'New Year'})
+        self.assertEqual(list(got), sorted(got))
+        self.assertEqual(self.c.delete('/api/settings/holidays/2026-11-26').status_code, 200)
+        self.assertEqual(self.c.delete('/api/settings/holidays/2026-11-26').status_code, 404)
+        self.assertEqual(len(self.get('/api/settings/calendar')['holidays']), 2)
+
+    def test_holiday_ranges_include_both_ends_and_share_the_label(self):
+        r = self.c.post('/api/settings/holidays', json={'start': '2026-11-23', 'end': '2026-11-27', 'label': 'Thanksgiving week'})
+        self.assertEqual((r.status_code, r.get_json()['added']), (201, 5))
+        got = self.get('/api/settings/calendar')['holidays']
+        self.assertEqual([h['date'] for h in got], ['2026-11-23', '2026-11-24', '2026-11-25', '2026-11-26', '2026-11-27'])
+        self.assertEqual({h['label'] for h in got}, {'Thanksgiving week'})
+        # no end: just that day; same day twice is fine; ranges cross month ends
+        self.c.post('/api/settings/holidays', json={'start': '2026-12-25', 'end': ''})
+        self.c.post('/api/settings/holidays', json={'start': '2026-12-30', 'end': '2026-12-30'})
+        self.c.post('/api/settings/holidays', json={'start': '2026-12-31', 'end': '2027-01-01'})
+        self.assertEqual([h['date'] for h in self.get('/api/settings/calendar')['holidays']][5:],
+                         ['2026-12-25', '2026-12-30', '2026-12-31', '2027-01-01'])
+
+    def test_bad_holiday_ranges_are_rejected(self):
+        for body in ({'start': '2026-11-27', 'end': '2026-11-23'}, {'end': '2026-11-27'},
+                     {'start': '2026-01-01', 'end': '2028-01-01'}, {'start': 'soon'}):
+            self.assertEqual(self.c.post('/api/settings/holidays', json=body).status_code, 400, body)
+        self.assertEqual(self.get('/api/settings/calendar')['holidays'], [])
+
+    def test_range_lines_in_an_imported_file_and_the_example_file(self):
+        text = '2026-11-23..2026-11-25 Time off\n2026-12-01\n'
+        self.assertEqual(self.c.post('/api/settings/holidays', json={'text': text}).get_json()['added'], 4)
+        self.assertEqual(self.c.post('/api/settings/holidays', json={'text': '2026-11-25..2026-11-23'}).status_code, 400)
+        r = self.c.get('/static/holidays-example.txt')
+        self.assertEqual(r.status_code, 200)
+        self.assertIn(b'yyyy-mm-dd..yyyy-mm-dd', r.data)
+        self.assertEqual(db.parse_holiday_text(r.data.decode()), [])          # as shipped it adds nothing
+        uncommented = '\n'.join(l[2:] for l in r.data.decode().splitlines() if l.startswith('# 20'))
+        self.assertEqual(len(db.parse_holiday_text(uncommented)), 1 + 1 + 8 + 1)   # every example line is valid
+        page = self.c.get('/settings').data
+        self.assertIn(b'holidays-example.txt', page)
+        self.assertIn(b'id="holidayEnd"', page)
+
+    def test_a_bad_holiday_line_rejects_the_whole_import(self):
+        r = self.c.post('/api/settings/holidays', json={'text': '2026-11-26\n11/27/2026\n2026-02-30\n'})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('line 2', r.get_json()['error'])
+        self.assertIn('line 3', r.get_json()['error'])
+        self.assertEqual(self.get('/api/settings/calendar')['holidays'], [])
+        self.assertEqual(self.c.post('/api/settings/holidays', json={}).status_code, 400)
+
+    # burn-up
+    def test_hiding_days_drops_the_weekend_but_not_the_time(self):
+        self.save_week()
+        shown = self.burnup(hide_non_working=False)
+        hidden = self.burnup(hide_non_working=True)
+        self.assertEqual(len(shown['days']), 6)
+        self.assertEqual(hidden['days'], ['2026-11-05', '2026-11-06', '2026-11-09', '2026-11-10'])
+        self.assertEqual(hidden['hidden_days'], 2)
+        self.assertEqual([b['day'] for b in hidden['bands']], hidden['days'])
+        self.assertEqual(hidden['day_edges'][-1], '2026-11-11T00:00:00Z')
+        self.assertEqual(hidden['total_minutes'], shown['total_minutes'])
+        self.assertEqual(hidden['cards'], shown['cards'])
+        by_day = {p['day']: p['minutes'] for p in hidden['points'] if p['kind'] == 'day_end'}
+        self.assertEqual(by_day, {'2026-11-05': 0, '2026-11-06': 240, '2026-11-09': 3600})   # weekend is in Monday's total
+        self.assertEqual((hidden['points'][-1]['kind'], hidden['points'][-1]['minutes']), ('now', 3600))
+
+    def test_shown_non_working_time_is_listed_for_shading(self):
+        self.save_week(start='09:00', end='17:00')
+        self.c.post('/api/settings/holidays', json={'dates': ['2026-11-09']})
+        day = self.burnup(hide_non_working=False)                  # daily view: whole non-working days only
+        self.assertEqual(day['non_working'], [{'start': '2026-11-07T00:00:00Z', 'end': '2026-11-10T00:00:00Z'}])   # Sat, Sun, holiday Mon
+        hour = self.burnup(step='hour', hide_non_working=False)    # hourly: nights too, merged across days
+        self.assertEqual(hour['non_working'][0], {'start': '2026-11-05T00:00:00Z', 'end': '2026-11-05T09:00:00Z'})
+        self.assertEqual(hour['non_working'][1], {'start': '2026-11-05T17:00:00Z', 'end': '2026-11-06T09:00:00Z'})
+        self.assertEqual(hour['non_working'][2], {'start': '2026-11-06T17:00:00Z', 'end': '2026-11-10T09:00:00Z'})
+        self.assertEqual(hour['non_working'][-1], {'start': '2026-11-10T17:00:00Z', 'end': '2026-11-11T00:00:00Z'})
+        self.assertEqual(self.burnup(step='hour', hide_non_working=True)['non_working'], [])   # hidden: nothing to shade
+
+    def test_only_the_weekend_is_shaded_by_default_and_nothing_when_all_days_work(self):
+        self.assertEqual(self.burnup(step='hour')['non_working'][:1], [{'start': '2026-11-07T00:00:00Z', 'end': '2026-11-09T00:00:00Z'}])
+        self.save_week()
+        self.c.put('/api/settings/calendar', json={'week': [dict(day=d, on=True) for d in db.WEEKDAYS]})
+        self.assertEqual(self.burnup(step='hour')['non_working'], [])
+
+    def test_holidays_are_hidden_like_weekends(self):
+        self.save_week()
+        self.c.post('/api/settings/holidays', json={'dates': ['2026-11-09']})
+        out = self.burnup(hide_non_working=True)
+        self.assertEqual(out['days'], ['2026-11-05', '2026-11-06', '2026-11-10'])
+        self.assertEqual(out['total_minutes'], 3600)
+        self.assertEqual(self.burnup(hide_non_working=False)['hidden_days'], 0)       # shown: nothing is dropped
+
+    def test_hiding_hours_keeps_only_working_hours_in_the_hourly_view(self):
+        self.save_week(start='09:00', end='17:00')
+        out = self.burnup(step='hour', hide_non_working=True)
+        self.assertEqual([(b['day'], b['start'], b['end']) for b in out['bands']],
+                         [('2026-11-05', '2026-11-05T09:00:00Z', '2026-11-05T17:00:00Z'),
+                          ('2026-11-06', '2026-11-06T09:00:00Z', '2026-11-06T17:00:00Z'),
+                          ('2026-11-09', '2026-11-09T09:00:00Z', '2026-11-09T17:00:00Z'),
+                          ('2026-11-10', '2026-11-10T09:00:00Z', '2026-11-10T17:00:00Z')])
+        by_at = {p['at']: p['minutes'] for p in out['points']}
+        self.assertEqual(out['points'][0]['at'], '2026-11-05T09:00:00Z')
+        self.assertEqual(by_at['2026-11-06T17:00:00Z'], 0)                    # X starts at 20:00, after hours
+        self.assertEqual(by_at['2026-11-09T09:00:00Z'], 3600)                 # the whole stretch lands here
+        self.assertEqual(out['points'][-1]['at'], '2026-11-10T12:00:00Z')
+        self.assertEqual(out['total_minutes'], 3600)
+        for p in out['points']:                                               # nothing is plotted outside a band
+            self.assertTrue(any(b['start'] <= p['at'] <= b['end'] for b in out['bands']), p)
+        mins = [p['minutes'] for p in out['points']]
+        self.assertEqual(mins, sorted(mins))
+        full = self.burnup(step='hour', hide_non_working=False)
+        self.assertEqual(full['total_minutes'], 3600)
+        self.assertEqual(len(full['bands']), 6)
+
+    def test_now_in_a_gap_is_still_plotted(self):
+        self.save_week(start='09:00', end='17:00')
+        self.NOW = datetime.datetime(2026, 11, 10, 20, 0, tzinfo=datetime.timezone.utc)   # after hours on the last day
+        out = self.burnup(step='hour', hide_non_working=True)
+        self.assertEqual((out['points'][-1]['kind'], out['points'][-1]['at']), ('now', '2026-11-10T20:00:00Z'))
+        self.assertEqual(out['total_minutes'], 3600)
+
+    def test_setting_is_the_default_and_the_query_overrides_it(self):
+        self.save_week()
+        self.c.put('/api/settings/calendar', json={'hide_non_working': True})
+        url = f'/api/sprint/{self.sid}/burnup'
+        self.assertEqual(len(self.get(url)['days']), 4)
+        self.assertTrue(self.get(url)['hide_non_working'])
+        self.assertEqual(len(self.get(url + '?hide_non_working=false')['days']), 6)
+        self.c.put('/api/settings/calendar', json={'hide_non_working': False})
+        self.assertEqual(len(self.get(url)['days']), 6)
+        self.assertEqual(len(self.get(url + '?hide_non_working=true')['days']), 4)
+
+    def test_all_days_off_falls_back_to_showing_everything(self):
+        self.c.put('/api/settings/calendar', json={'week': [dict(day=d, on=False) for d in db.WEEKDAYS]})
+        out = self.burnup(hide_non_working=True)
+        self.assertEqual(len(out['days']), 6)
+        self.assertFalse(out['hide_non_working'])
+        self.assertTrue(any('non-working' in n for n in out['notes']))
+
+    def test_pages_carry_the_controls_and_the_scripts_parse(self):
+        self.assertIn(b'id="buHideBtn"', self.c.get('/burnup').data)
+        page = self.c.get('/settings').data
+        for needle in (b'data-tab="working"', b'id="workWeek"', b'id="holidayList"', b'id="holidayImportBtn"'):
+            self.assertIn(needle, page)
+        import shutil
+        import subprocess
+        node = shutil.which('node')
+        if node:
+            root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            for js in ('settings.js', 'burnup.js'):
+                r = subprocess.run([node, '--check', os.path.join(root, 'static', js)], capture_output=True, text=True)
+                self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_upgrade_from_v12_keeps_the_board(self):
+        """A v12 database has no settings or holidays tables; opening it must add them and leave the board alone."""
+        import subprocess
+        d = tempfile.mkdtemp(prefix='perkan-v12-')
+        code = ("import os, sys; os.environ['PERKAN_DATA_DIR']=%r; sys.path.insert(0,%r)\n"
+                "import app, db\n"
+                "c = db._connect()\n"
+                "n = c.execute('SELECT COUNT(*) FROM cards').fetchone()[0]\n"
+                "c.execute('DROP TABLE settings'); c.execute('DROP TABLE holidays'); c.execute('PRAGMA user_version = 12'); c.close()\n"
+                "db.init(app._normalize_board, app.DEFAULT_BOARD)\n"
+                "c = db._connect()\n"
+                "print(c.execute('PRAGMA user_version').fetchone()[0], c.execute('SELECT COUNT(*) FROM holidays').fetchone()[0],"
+                " c.execute('SELECT COUNT(*) FROM cards').fetchone()[0] == n)\n"
+                % (d, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        proc = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        out = proc.stdout.split()
+        self.assertEqual(out, [str(db.SCHEMA_VERSION), '0', 'True'])
+
+
 class CardTimeTests(Base):
     """Total minutes per column from a card's history, checked by hand. now = 2026-11-03 18:00 UTC.
     Card A: created in todo 07:00; doing 07:46; archive (waiting) 12:14; doing again 13:00; done 15:30.

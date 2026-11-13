@@ -1,6 +1,7 @@
 // Sprint burn-up page: cumulative minutes spent on the sprint's cards over the sprint's dates.
 // Data: GET /api/sprint/<id|active>/burnup?step=hour|day. The page URL keeps the choices:
-// ?sprint=<id> (default: the active sprint) and ?step=day (default: hour).
+// ?sprint=<id> (default: the active sprint), ?step=day (default: hour) and ?hide=1|0 (default: the saved
+// "hide non-working time" setting; Settings > Working time).
 
 const $ = (id) => document.getElementById(id);
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -79,6 +80,7 @@ async function api(url) {
 
 const params = () => new URLSearchParams(location.search);
 const currentStep = () => (params().get('step') === 'day' ? 'day' : 'hour');
+const hideQuery = () => { const h = params().get('hide'); return h === '1' ? '&hide_non_working=true' : (h === '0' ? '&hide_non_working=false' : ''); };
 
 function sprintLabel(s) {
   const dates = s.start_date ? `${fmtDate(s.start_date, { month: 'short', day: 'numeric' })} to ${fmtDate(s.end_date, { month: 'short', day: 'numeric' })}`
@@ -106,7 +108,7 @@ function buildSelect() {
 
 function reset() {
   ['buNotes', 'buDayTable', 'buCards', 'buUnknown', 'buChart'].forEach((id) => $(id).replaceChildren());
-  ['buChartWrap', 'buTotal', 'buDesc', 'buTableBtn', 'buSteps', 'buCardsSection', 'buTip'].forEach((id) => { $(id).hidden = true; });
+  ['buChartWrap', 'buTotal', 'buDesc', 'buTableBtn', 'buHideBtn', 'buSteps', 'buCardsSection', 'buTip'].forEach((id) => { $(id).hidden = true; });
   $('buSub').textContent = '';
   $('buDesc').textContent = '';
   current = null;
@@ -117,7 +119,7 @@ async function show() {
   const ref = params().get('sprint') || 'active';
   let data;
   try {
-    data = await api(`/api/sprint/${encodeURIComponent(ref)}/burnup?step=${currentStep()}`);
+    data = await api(`/api/sprint/${encodeURIComponent(ref)}/burnup?step=${currentStep()}${hideQuery()}`);
   } catch (err) {
     $('buTitle').value = '';
     $('buNotes').appendChild(el('p', 'bu-note', err.message + (ref === 'active' ? '. Pick a sprint above, or start one on the Sprints page.' : '.')));
@@ -149,25 +151,31 @@ function render(data) {
   $('buTotalValue').textContent = fmtMinutes(data.total_minutes);
   $('buChartWrap').hidden = false;
   $('buSteps').hidden = false;
+  $('buHideBtn').hidden = false;
+  $('buHideBtn').setAttribute('aria-pressed', data.hide_non_working ? 'true' : 'false');
+  $('buHideBtn').textContent = data.hide_non_working ? 'Show non-working time' : 'Hide non-working time';
   document.querySelectorAll('#buSteps [data-step]').forEach((b) => b.setAttribute('aria-pressed', b.dataset.step === data.step ? 'true' : 'false'));
   drawChart(data);
   const cols = data.work_columns.map((c) => c.title).join(', ');
   if (cols) {
     $('buDesc').hidden = false;
     $('buDesc').textContent = `Cumulative wall-clock minutes the sprint's cards spent in ${cols}, while they were in this sprint. ` +
-      'Cards in progress at the same time add up. ' + (data.step === 'hour' ? 'One point per hour.' : 'One point per finished day.');
+      'Cards in progress at the same time add up. ' + (data.step === 'hour' ? 'One point per hour.' : 'One point per finished day.') +
+      (!data.hide_non_working && (data.non_working || []).length ? ' Gray areas are non-working time.' : '') +
+      (data.hide_non_working ? ' Non-working time is hidden; time tracked in it is included at the next working point, so the total does not change.' : '');
   }
   renderTable(data);
   renderCards(data);
 }
 
-// x position (0..1) of an instant: each day is an equal band, placed by that day's exact edges (DST safe)
-function xFraction(iso, edges) {
+// x position (0..1) of an instant: each shown day is an equal band, placed by that band's exact start and end
+// (DST safe). An instant in a hidden stretch (a weekend, the night) sits at the edge between the bands around it.
+function xFraction(iso, bands) {
   const t = Date.parse(iso);
-  const n = edges.length - 1;
-  if (t <= Date.parse(edges[0])) return 0;
+  const n = bands.length;
   for (let i = 0; i < n; i++) {
-    const a = Date.parse(edges[i]), b = Date.parse(edges[i + 1]);
+    const a = Date.parse(bands[i].start), b = Date.parse(bands[i].end);
+    if (t < a) return i / n;
     if (t <= b) return (i + (t - a) / (b - a)) / n;
   }
   return 1;
@@ -183,13 +191,19 @@ function drawChart(data) {
   const top = Math.max(step, Math.ceil(maxV / step) * step);
   const x = (frac) => M.l + frac * IW;
   const y = (v) => M.t + IH - (v / top) * IH;
-  const pts = points.map((p) => [x(xFraction(p.at, data.day_edges)), y(p.minutes)]);
+  const pts = points.map((p) => [x(xFraction(p.at, data.bands)), y(p.minutes)]);
 
   for (let v = 0; v <= top; v += step) {
     chart.appendChild(svg('line', { class: v === 0 ? 'bu-axis' : 'bu-grid', x1: M.l, x2: M.l + IW, y1: y(v), y2: y(v) }));
     chart.appendChild(svg('text', { class: 'bu-axis-text', x: M.l - 8, y: y(v) + 4, 'text-anchor': 'end' }, v.toLocaleString()));
   }
   chart.appendChild(svg('text', { class: 'bu-axis-title', transform: `translate(14 ${M.t + IH / 2}) rotate(-90)`, 'text-anchor': 'middle' }, 'Minutes spent (cumulative)'));
+
+  // non-working time (only sent while it is shown) is shaded gray behind everything else
+  (data.non_working || []).forEach((seg) => {
+    const x0 = x(xFraction(seg.start, data.bands)), x1 = x(xFraction(seg.end, data.bands));
+    if (x1 > x0) chart.appendChild(svg('rect', { class: 'bu-nonwork', x: x0, y: M.t, width: x1 - x0, height: IH }));
+  });
 
   // day separators, and one label per day band (every k-th when there are many; the last only if it has room)
   for (let i = 1; i < n; i++) chart.appendChild(svg('line', { class: 'bu-grid', x1: x(i / n), x2: x(i / n), y1: M.t, y2: M.t + IH }));
@@ -307,6 +321,12 @@ function renderCards(data) {
   }
 }
 
+$('buHideBtn').addEventListener('click', () => {
+  const p = params();
+  p.set('hide', current && current.hide_non_working ? '0' : '1');
+  history.replaceState(null, '', `?${p}`);
+  show();
+});
 $('buTableBtn').addEventListener('click', () => { showTable = !showTable; applyTable(); });
 document.querySelectorAll('#buSteps [data-step]').forEach((b) => b.addEventListener('click', () => {
   if (b.dataset.step === currentStep()) return;
