@@ -243,6 +243,12 @@ function cardRow(card, closed) {
     pill.style.color = pillTextColor(col.color || '#888');
     li.appendChild(pill);
   }
+  const edit = el('button', 'sp-edit', '✎');
+  edit.type = 'button';
+  edit.title = 'Edit card';
+  edit.setAttribute('aria-label', `Edit card: ${card.title}`);
+  edit.addEventListener('click', () => openCardDialog(null, card));
+  li.appendChild(edit);
   if (!closed) {
     li.draggable = true;
     li.addEventListener('dragstart', (e) => {
@@ -323,16 +329,22 @@ async function dropCard(id, target, neighborIds, index) {
 // New backlog card: `where` is 'top' or 'bottom' of the backlog.
 let newCardWhere = 'bottom';
 
-function openCardDialog(where) {
+// With `card`, the same dialog edits that card instead of creating one.
+let editingCard = null;
+
+function openCardDialog(where, card) {
+  editingCard = card || null;
   newCardWhere = where;
-  $('cardDialogTitle').textContent = where === 'top' ? 'New card at the top of the backlog' : 'New card at the bottom of the backlog';
-  $('ncTitle').value = '';
-  $('ncDescription').value = '';
-  $('ncAssignee').value = '';
+  $('cardDialogTitle').textContent = card ? 'Edit card'
+    : where === 'top' ? 'New card at the top of the backlog' : 'New card at the bottom of the backlog';
+  $('ncSave').textContent = card ? 'Save' : 'Add card';
+  $('ncTitle').value = card ? card.title : '';
+  $('ncDescription').value = card ? (card.description || '') : '';
+  $('ncAssignee').value = card ? (card.assignee || '') : '';
   const select = $('ncProject');
   select.replaceChildren(new Option('(no project)', ''));
   state.projects.forEach((p) => select.appendChild(new Option(p.name, p.name)));
-  select.value = state.project || '';          // an active project filter pre-selects its project
+  select.value = card ? (card.project || '') : (state.project || '');   // an active project filter pre-selects its project for new cards
   $('ncError').hidden = true;
   $('cardDialog').showModal();
   $('ncTitle').focus();
@@ -342,6 +354,20 @@ $('cardForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const title = $('ncTitle').value.trim();
   if (!title) { $('ncError').textContent = 'A title is required.'; $('ncError').hidden = false; return; }
+  if (editingCard) {                           // send every field so a cleared project/assignee/description is saved
+    try {
+      await api('PUT', `/api/card/${editingCard.id}`, {
+        title, description: $('ncDescription').value.trim(), assignee: $('ncAssignee').value.trim(), project: $('ncProject').value,
+      });
+      $('cardDialog').close();
+    } catch (err) {
+      $('ncError').textContent = err.message;
+      $('ncError').hidden = false;
+      return;
+    }
+    await load();
+    return;
+  }
   const body = { title, sprint: 'backlog', column: Object.keys(state.columns)[0] };
   if ($('ncDescription').value.trim()) body.description = $('ncDescription').value.trim();
   if ($('ncAssignee').value.trim()) body.assignee = $('ncAssignee').value.trim();
