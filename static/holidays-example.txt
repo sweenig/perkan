@@ -1,0 +1,18 @@
+# Perkan holidays: one entry per line.
+#
+# Lines starting with # and blank lines are ignored, so you can keep these examples
+# or delete them. Edit this file offline, then load it in Settings > Working time.
+#
+# Syntax:
+#   yyyy-mm-dd                     one day
+#   yyyy-mm-dd Label               one day with a label
+#   yyyy-mm-dd..yyyy-mm-dd Label   a range, first and last day included, every day gets the label
+# A comma may separate the date from the label, and the label may be in quotes.
+# A date that is already listed keeps one entry; its label is replaced.
+# If any line is wrong, nothing is imported and the bad line numbers are shown.
+
+# Examples (remove the leading # to use one):
+# 2026-11-26 Thanksgiving
+# 2026-11-27,"Day after Thanksgiving"
+# 2026-12-24..2026-12-31 Year-end shutdown
+# 2027-01-01 New Year's Day

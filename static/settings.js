@@ -320,6 +320,8 @@ function activateSettingsTab(tabId){
     renderStatusSettings();
   } else if(tabId === 'projects'){
     renderProjectSettings();
+  } else if(tabId === 'working'){
+    renderWorkingTime();
   }
 }
 
@@ -370,6 +372,110 @@ if(importBoardBtn){
     importBoardJson();
   });
 }
+
+
+// Working time: working days/hours, hide-by-default and the holiday list (burn-up x-axis).
+const WORK_DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+async function workApi(url, method, body){
+  const res = await fetch(url, body === undefined ? {} : {method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  let data = null;
+  try { data = await res.json(); } catch(e) { /* no body */ }
+  if(!res.ok) throw new Error((data && data.error) || ('Request failed (' + res.status + ')'));
+  return data;
+}
+
+function renderHolidays(holidays){
+  const list = document.getElementById('holidayList');
+  list.innerHTML = '';
+  if(!holidays.length){
+    list.innerHTML = '<p class="hint">No holidays listed.</p>';
+    return;
+  }
+  holidays.forEach(h => {
+    const row = document.createElement('div');
+    row.className = 'holiday-row';
+    const when = new Date(h.date + 'T00:00:00').toLocaleDateString(undefined, {weekday:'short', year:'numeric', month:'short', day:'numeric'});
+    row.innerHTML = '<span class="holiday-date">' + escapeHtml(when) + '</span><span class="holiday-label">' +
+      escapeHtml(h.label) + '</span><button type="button" data-date="' + escapeHtml(h.date) + '">Remove</button>';
+    row.querySelector('button').addEventListener('click', async (e) => {
+      try { renderHolidays((await workApi('/api/settings/holidays/' + e.target.dataset.date, 'DELETE')).holidays); }
+      catch(err){ document.getElementById('holidayError').textContent = err.message; }
+    });
+    list.appendChild(row);
+  });
+}
+
+async function renderWorkingTime(){
+  const cal = await workApi('/api/settings/calendar');
+  const box = document.getElementById('workWeek');
+  box.innerHTML = '';
+  cal.week.forEach((d, i) => {
+    const row = document.createElement('div');
+    row.className = 'work-day';
+    row.innerHTML = '<label class="col-hide-toggle"><input class="work-on" type="checkbox"' + (d.on ? ' checked' : '') + ' /> ' +
+      WORK_DAY_NAMES[i] + '</label>' +
+      '<input class="work-start" type="time" value="' + d.start + '" aria-label="' + WORK_DAY_NAMES[i] + ' start" />' +
+      '<span>to</span>' +
+      '<input class="work-end" type="time" value="' + (d.end === '24:00' ? '23:59' : d.end) + '" data-full="' + (d.end === '24:00') + '" aria-label="' + WORK_DAY_NAMES[i] + ' end" />';
+    box.appendChild(row);
+  });
+  document.getElementById('workHideDefault').checked = cal.hide_non_working;
+  renderHolidays(cal.holidays);
+}
+
+async function saveWorkingTime(){
+  const saved = document.getElementById('workSaved');
+  const week = Array.from(document.querySelectorAll('#workWeek .work-day')).map((row, i) => {
+    const end = row.querySelector('.work-end');
+    // 23:59 left untouched from a full day goes back as 24:00
+    return {on: row.querySelector('.work-on').checked, start: row.querySelector('.work-start').value || '00:00',
+            end: (end.dataset.full === 'true' && end.value === '23:59') ? '24:00' : (end.value || '24:00')};
+  });
+  try {
+    await workApi('/api/settings/calendar', 'PUT', {week, hide_non_working: document.getElementById('workHideDefault').checked});
+    await renderWorkingTime();
+    saved.textContent = 'Saved.';
+  } catch(err){
+    saved.textContent = err.message;
+  }
+}
+
+async function addHolidays(body){
+  const err = document.getElementById('holidayError');
+  err.textContent = '';
+  try {
+    const out = await workApi('/api/settings/holidays', 'POST', body);
+    renderHolidays(out.holidays);
+    return true;
+  } catch(e){
+    err.textContent = e.message;
+    return false;
+  }
+}
+
+document.getElementById('workSaveBtn').addEventListener('click', saveWorkingTime);
+document.getElementById('holidayAddBtn').addEventListener('click', async () => {
+  const date = document.getElementById('holidayDate').value;
+  if(!date){ document.getElementById('holidayError').textContent = 'Pick a date first.'; return; }
+  const end = document.getElementById('holidayEnd').value;
+  if(end && end < date){ document.getElementById('holidayError').textContent = 'The end date is before the start date.'; return; }
+  if(await addHolidays({start:date, end:end || null, label: document.getElementById('holidayLabel').value})){
+    document.getElementById('holidayDate').value = '';
+    document.getElementById('holidayEnd').value = '';
+    document.getElementById('holidayLabel').value = '';
+  }
+});
+document.getElementById('holidayFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if(file) document.getElementById('holidayText').value = await file.text();
+});
+document.getElementById('holidayImportBtn').addEventListener('click', async () => {
+  if(await addHolidays({text: document.getElementById('holidayText').value})){
+    document.getElementById('holidayText').value = '';
+    document.getElementById('holidayFile').value = '';
+  }
+});
 
 
 // Deep links: /settings?tab=projects&project=<name> opens that tab and the project's edit form.

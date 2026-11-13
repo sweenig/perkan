@@ -26,6 +26,7 @@
     <div class="settings-tabs" role="tablist">
           <button type="button" class="settings-tab-btn active" data-tab="statuses">Statuses</button>
           <button type="button" class="settings-tab-btn" data-tab="projects">Projects</button>
+          <button type="button" class="settings-tab-btn" data-tab="working">Working time</button>
           <button type="button" class="settings-tab-btn" data-tab="import">Import/Export</button>
           <button type="button" class="settings-tab-btn" data-tab="about">About</button>
         </div>
@@ -42,6 +43,41 @@
             <div id="projectsList" class="projects-list"></div>
             <div class="add-project">
               <button id="addProjectBtn">Add Project</button>
+            </div>
+          </div>
+          <div class="settings-tab-panel" data-tab="working">
+            <div class="import-export-panel">
+              <section class="import-block">
+                <h3>Working days and hours</h3>
+                <p>The burn-up can leave non-working time off its x-axis. Tracked time is never lost: it is counted at the next working point, so totals do not change. Times are in the server's time zone (PERKAN_TZ).</p>
+                <div id="workWeek" class="work-week"></div>
+                <label class="col-hide-toggle work-hide-default">
+                  <input id="workHideDefault" type="checkbox" />
+                  Hide non-working time on the burn-up by default
+                </label>
+                <div class="import-actions">
+                  <button type="button" id="workSaveBtn">Save</button>
+                  <span id="workSaved" class="work-saved" role="status"></span>
+                </div>
+              </section>
+              <section class="import-block">
+                <h3>Holidays</h3>
+                <p>Whole days off, hidden like a non-working weekday. Add one day, or a whole range such as a week off (leave the end date empty for a single day; both ends are included and share the label). Or paste or load a file with one <code>yyyy-mm-dd</code> or <code>yyyy-mm-dd..yyyy-mm-dd</code> per line, optionally followed by a label (lines starting with # are ignored). A bad line rejects the whole import. <a href="/static/holidays-example.txt" download="holidays-example.txt">Download an example file</a>.</p>
+                <div class="work-add">
+                  <input id="holidayDate" type="date" aria-label="Holiday date (start of the range)" />
+                  <span>to</span>
+                  <input id="holidayEnd" type="date" aria-label="Last day of the range (optional)" />
+                  <input id="holidayLabel" placeholder="Label (optional)" aria-label="Holiday label" />
+                  <button type="button" id="holidayAddBtn">Add</button>
+                </div>
+                <textarea id="holidayText" rows="4" placeholder="2026-12-25 Christmas&#10;2027-01-01 New Year" aria-label="Holidays to import, one per line"></textarea>
+                <div class="import-actions">
+                  <input type="file" id="holidayFile" accept=".txt,.csv,text/plain" />
+                  <button type="button" id="holidayImportBtn">Import list</button>
+                </div>
+                <div id="holidayError" class="project-error" role="alert"></div>
+                <div id="holidayList" class="holiday-list"></div>
+              </section>
             </div>
           </div>
           <div class="settings-tab-panel" data-tab="import">
@@ -69,7 +105,7 @@
             <div style="padding: 20px; text-align: center;">
               <h3>Personal Kanban</h3>
               <p style="font-size: 14px; color: rgba(255, 255, 255, 0.7); margin: 16px 0;">
-                Version 1.11
+                Version 1.12
               </p>
               <p style="font-size: 14px; color: rgba(255, 255, 255, 0.7); margin: 16px 0;">
                 Written by Stuart Weenig
