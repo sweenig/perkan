@@ -28,6 +28,9 @@
     <dialog id="sprintDialog" class="sp-dialog">
       <form method="dialog" id="sprintForm">
         <h2 id="sprintDialogTitle">New sprint</h2>
+        <label>Starts on <small>(optional; defaults to the day you start it)</small>
+          <input type="date" id="spBegin">
+        </label>
         <label>Ends on (the sprint ends at the end of this day)
           <input type="date" id="spEnd" required>
         </label>
@@ -78,7 +81,8 @@
           <label class="sp-radio"><input type="radio" name="unfinished" value="carry_over" checked> Carry over to the next sprint (keep their column)</label>
           <div id="carryOptions" class="sp-indent">
             <label class="sp-radio"><input type="radio" name="carryTo" value="new" checked> New sprint ending
-              <input type="date" id="cpEnd"></label>
+              <input type="date" id="cpEnd">
+              starting <input type="date" id="cpBegin" title="Optional. Defaults to the day it is started."></label>
             <label class="sp-radio"><input type="radio" name="carryTo" value="existing"> Existing planned sprint
               <select id="cpExisting"></select></label>
             <label class="sp-radio"><input type="checkbox" id="cpStart"> Start it right away</label>
