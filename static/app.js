@@ -44,7 +44,16 @@ function expandIconSvg(expand){
 }
 function cardToggleLabel(truncated){ return truncated ? 'Expand this card' : 'Collapse this card'; }
 let sprintOnlyEnabled = localStorage.getItem('sprintOnlyEnabled') === 'true';
-let meetingsOnlyEnabled = localStorage.getItem('meetingsOnlyEnabled') === 'true';
+// Meetings filter: 'all' (default), 'only' (just meeting cards) or 'hide' (no meeting cards).
+// An older saved "Meetings only" = true becomes 'only'.
+let meetingsMode = (()=>{
+  const saved = localStorage.getItem('meetingsMode');
+  if(saved === 'only' || saved === 'hide' || saved === 'all') return saved;
+  return localStorage.getItem('meetingsOnlyEnabled') === 'true' ? 'only' : 'all';
+})();
+// Which way the next click leaves 'all': the cycle is all -> only -> all -> hide -> all.
+let meetingsNext = meetingsMode === 'only' ? 'hide' : 'only';
+const meetingExcluded = card => meetingsMode === 'only' ? !(card && card.meeting) : (meetingsMode === 'hide' && !!(card && card.meeting));
 let draggedCardId = null;
 let draggedCardColumnId = null;
 async function failMessage(res, fallback){
@@ -94,7 +103,7 @@ function collectProjectCounts(board){
     col.cards.forEach(card => {
       // with "Current sprint" on, only offer (and count) projects that have a card in the active sprint
       if(sprintOnlyEnabled && !(board.active_sprint && card && card.sprint === board.active_sprint)) return;
-      if(meetingsOnlyEnabled && !(card && card.meeting)) return;
+      if(meetingExcluded(card)) return;
       const projectName = card && card.project ? card.project.trim() : '';
       if(!projectName) return;
       counts.set(projectName, (counts.get(projectName) || 0) + 1);
@@ -551,14 +560,14 @@ async function render(options = {}){
       continue;
     }
     const cardsInColumn = Array.isArray(col.cards) ? col.cards : [];
-    const filtering = !!activeProjectFilter || sprintOnlyEnabled || meetingsOnlyEnabled;
+    const filtering = !!activeProjectFilter || sprintOnlyEnabled || meetingsMode !== 'all';
     const visibleCards = !filtering
       ? cardsInColumn
       : cardsInColumn.filter(card => {
           if(sprintOnlyEnabled && !(board.active_sprint && card && card.sprint === board.active_sprint)){
             return false;
           }
-          if(meetingsOnlyEnabled && !(card && card.meeting)) return false;
+          if(meetingExcluded(card)) return false;
           if(activeProjectFilter){
             const projectName = card && card.project ? card.project.trim() : '';
             return projectName === activeProjectFilter;
@@ -852,14 +861,24 @@ if(sprintOnlyBtn && document.getElementById('board')){
 
 const meetingsOnlyBtn = document.getElementById('meetingsOnlyBtn');
 if(meetingsOnlyBtn && document.getElementById('board')){
+  const labels = {
+    all: 'Showing all cards. Click to show only meetings.',
+    only: 'Showing only meeting cards. Click to show all.',
+    hide: 'Hiding meeting cards. Click to show all.'
+  };
   const syncMeetingsOnlyBtn = ()=>{
-    meetingsOnlyBtn.setAttribute('aria-pressed', meetingsOnlyEnabled ? 'true' : 'false');
-    meetingsOnlyBtn.classList.toggle('active', meetingsOnlyEnabled);
+    meetingsOnlyBtn.dataset.mode = meetingsMode;
+    const label = meetingsMode === 'all'
+      ? 'Showing all cards. Click to ' + (meetingsNext === 'only' ? 'show only meetings.' : 'hide meetings.')
+      : labels[meetingsMode];
+    meetingsOnlyBtn.title = label;
+    meetingsOnlyBtn.setAttribute('aria-label', label);
   };
   syncMeetingsOnlyBtn();
   meetingsOnlyBtn.addEventListener('click', ()=>{
-    meetingsOnlyEnabled = !meetingsOnlyEnabled;
-    localStorage.setItem('meetingsOnlyEnabled', meetingsOnlyEnabled);
+    if(meetingsMode === 'all'){ meetingsMode = meetingsNext; }
+    else { meetingsNext = meetingsMode === 'only' ? 'hide' : 'only'; meetingsMode = 'all'; }
+    localStorage.setItem('meetingsMode', meetingsMode);
     syncMeetingsOnlyBtn();
     render({useLatest: true});
   });
