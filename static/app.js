@@ -44,6 +44,7 @@ function expandIconSvg(expand){
 }
 function cardToggleLabel(truncated){ return truncated ? 'Expand this card' : 'Collapse this card'; }
 let sprintOnlyEnabled = localStorage.getItem('sprintOnlyEnabled') === 'true';
+let meetingsOnlyEnabled = localStorage.getItem('meetingsOnlyEnabled') === 'true';
 let draggedCardId = null;
 let draggedCardColumnId = null;
 async function failMessage(res, fallback){
@@ -93,6 +94,7 @@ function collectProjectCounts(board){
     col.cards.forEach(card => {
       // with "Current sprint" on, only offer (and count) projects that have a card in the active sprint
       if(sprintOnlyEnabled && !(board.active_sprint && card && card.sprint === board.active_sprint)) return;
+      if(meetingsOnlyEnabled && !(card && card.meeting)) return;
       const projectName = card && card.project ? card.project.trim() : '';
       if(!projectName) return;
       counts.set(projectName, (counts.get(projectName) || 0) + 1);
@@ -340,6 +342,7 @@ function createCardElement(card, projectMap) {
     <div class="card-footer">
       <div class="card-footer-left">
         ${linkCount > 0 ? `<div class="card-links" title="${linkCount} link${linkCount!==1?'s':''}">🔗 ${linkCount}</div>` : ''}
+        ${card.meeting ? `<div class="card-meeting" title="Came from a meeting on the calendar" aria-label="Meeting">📅</div>` : ''}
         ${card.column_since ? `<div class="card-age" title="In this column since ${fmtDateTime(card.column_since)}">⏱ ${fmtAge(card.column_since)}</div>` : ''}
         ${card.added_after_start ? `<div class="card-added" title="Added to its sprint after the sprint started${card.added_to_sprint_at ? ' (' + fmtDateTime(card.added_to_sprint_at) + ')' : ''}">＋ added mid-sprint</div>` : ''}
       </div>
@@ -548,13 +551,14 @@ async function render(options = {}){
       continue;
     }
     const cardsInColumn = Array.isArray(col.cards) ? col.cards : [];
-    const filtering = !!activeProjectFilter || sprintOnlyEnabled;
+    const filtering = !!activeProjectFilter || sprintOnlyEnabled || meetingsOnlyEnabled;
     const visibleCards = !filtering
       ? cardsInColumn
       : cardsInColumn.filter(card => {
           if(sprintOnlyEnabled && !(board.active_sprint && card && card.sprint === board.active_sprint)){
             return false;
           }
+          if(meetingsOnlyEnabled && !(card && card.meeting)) return false;
           if(activeProjectFilter){
             const projectName = card && card.project ? card.project.trim() : '';
             return projectName === activeProjectFilter;
@@ -846,6 +850,21 @@ if(sprintOnlyBtn && document.getElementById('board')){
   });
 }
 
+const meetingsOnlyBtn = document.getElementById('meetingsOnlyBtn');
+if(meetingsOnlyBtn && document.getElementById('board')){
+  const syncMeetingsOnlyBtn = ()=>{
+    meetingsOnlyBtn.setAttribute('aria-pressed', meetingsOnlyEnabled ? 'true' : 'false');
+    meetingsOnlyBtn.classList.toggle('active', meetingsOnlyEnabled);
+  };
+  syncMeetingsOnlyBtn();
+  meetingsOnlyBtn.addEventListener('click', ()=>{
+    meetingsOnlyEnabled = !meetingsOnlyEnabled;
+    localStorage.setItem('meetingsOnlyEnabled', meetingsOnlyEnabled);
+    syncMeetingsOnlyBtn();
+    render({useLatest: true});
+  });
+}
+
 // The header button shows what a click does, like the per-card one: expand while truncating, collapse otherwise.
 function setTruncateBtnLabel(){
   const btn = document.getElementById('truncateBtn');
@@ -902,6 +921,7 @@ cardEditModal.innerHTML = `
       </div>
       <label>Assignee:</label>
       <input id="editCardAssignee" class="modal-input" placeholder="Assignee (optional)" />
+      <label class="meeting-check"><input type="checkbox" id="editCardMeeting" /> Came from a meeting</label>
       <label>Description:</label>
       <textarea id="editCardDesc" placeholder="Description (optional)"></textarea>
       <div id="editCardTimeline" class="timeline-section" style="display:none"></div>
@@ -1052,6 +1072,7 @@ async function openCardEditModal(card, isNew = false){
   document.getElementById('editCardTitle').value = card.title || '';
   document.getElementById('editCardDesc').value = card.description || '';
   document.getElementById('editCardAssignee').value = card.assignee || '';
+  document.getElementById('editCardMeeting').checked = !!card.meeting;
   const editProjectInput = document.getElementById('editCardProject');
   populateProjectInput(editProjectInput, card.project || '');
   renderLinkRows(card.links || []);
@@ -1162,7 +1183,7 @@ document.getElementById('editCardSaveBtn').addEventListener('click', async ()=>{
   const links = collectLinkRows();
   const project = document.getElementById('editCardProject').value;
   try {
-    const res = await fetch('/api/card/' + cardId, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({title, description, links, project, assignee})});
+    const res = await fetch('/api/card/' + cardId, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({title, description, links, project, assignee, meeting: document.getElementById('editCardMeeting').checked})});
     if(!res.ok) throw new Error('Failed to save card');
     closeCardEditModal();
     render();

@@ -93,7 +93,7 @@ def _tool_get_board(args):
 def _tool_list_cards(args):
     return _api('GET', _with_query('/api/cards', args,
                                    ['column', 'project', 'assignee', 'query', 'limit', 'offset', 'include_hidden',
-                                    'sprint', 'include_closed']))
+                                    'sprint', 'include_closed', 'meeting']))
 
 
 def _tool_create_card(args):
@@ -228,6 +228,7 @@ TOOLS = [
      _obj({'column': dict(_STR, description='Column id.'),
            'project': dict(_STR, description='Project name.'),
            'assignee': _STR,
+           'meeting': {'type': 'boolean', 'description': 'true: only meeting cards; false: only other cards.'},
            'sprint': dict(_SPRINT_ARG, description='Only cards in this sprint: an id, "active" or "backlog". '
                                                     'Includes done cards of closed sprints.'),
            'include_closed': {'type': 'boolean', 'description': 'Also include done cards of closed sprints '
@@ -243,7 +244,8 @@ TOOLS = [
            'column': dict(_STR, description="Column id (default 'todo')."),
            'position': {'type': 'integer', 'description': 'Index within the column (0 = top).'},
            'project': _STR, 'assignee': _STR, 'color': dict(_STR, description='Hex color; ignored if project set.'),
-           'sprint': _SPRINT_ARG, 'links': _LINKS}, ['title']),
+           'sprint': _SPRINT_ARG, 'links': _LINKS,
+           'meeting': {'type': 'boolean', 'description': 'True marks the card as coming from a meeting on the calendar (shown with a badge, filterable).'}}, ['title']),
      _tool_create_card),
     ('update_card', "Update a card's fields, move it to another column, and/or reorder it. "
                     "Order is one global value per card. Moving with only 'column' keeps the card's order "
@@ -252,7 +254,8 @@ TOOLS = [
                     "value; it works within the current column too. Pass an empty string for project/assignee to clear them. A card outside the active sprint cannot leave the first column (add it to the sprint first, or in the same call).",
      _obj({'id': _STR, 'title': _STR, 'description': _STR, 'column': dict(_STR, description='Destination column id, or "done" for the current done column.'),
            'position': {'type': 'integer', 'description': 'Index among the destination column\'s other cards (0 = top).'},
-           'project': _STR, 'assignee': _STR, 'color': _STR, 'sprint': _SPRINT_ARG, 'links': _LINKS}, ['id']),
+           'project': _STR, 'assignee': _STR, 'color': _STR, 'sprint': _SPRINT_ARG, 'links': _LINKS,
+           'meeting': {'type': 'boolean', 'description': 'True marks the card as coming from a meeting on the calendar (shown with a badge, filterable).'}}, ['id']),
      _tool_update_card),
     ('get_card_history', "A card's column-change history, oldest first (from/to column ids, UTC timestamp, "
                          "source), plus created_at, started_at, completed_at and column_since. started_at is the first move to another "

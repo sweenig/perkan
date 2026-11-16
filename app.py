@@ -34,6 +34,8 @@ def _sanitize_card(card):
     sanitized['title'] = str(card.get('title') or '').strip() or 'Untitled'
     sanitized['description'] = str(card.get('description') or '')
     sanitized['links'] = _clean_links(card.get('links'))
+    if _truthy(card.get('meeting')):
+        sanitized['meeting'] = True
     project_name = (card.get('project') or '').strip()
     if project_name:
         sanitized['project'] = project_name
@@ -402,6 +404,7 @@ def get_cards():
             conn, column=args.get('column') or None, project=args.get('project') or None,
             assignee=args.get('assignee') or None, query=args.get('query') or None,
             limit=limit, offset=offset or 0, include_hidden=_truthy(args.get('include_hidden')),
+            meeting=_truthy(args.get('meeting')) if args.get('meeting') not in (None, '') else None,
             sprint=args.get('sprint') or None, include_closed=_truthy(args.get('include_closed')))
     return jsonify({'cards': cards, 'total': total})
 
@@ -416,6 +419,7 @@ def create_card():
     project_name = (data.get('project') or '').strip()
     assignee = (data.get('assignee') or '').strip()
     links = _clean_links(data.get('links'))
+    meeting = _truthy(data.get('meeting'))
     position = _int_or_none(data.get('position'))  # optional index within the column
     if not title:
         return jsonify({'error': 'title required'}), 400
@@ -437,6 +441,8 @@ def create_card():
             'description': description,
             'links': links
         }
+        if meeting:
+            card['meeting'] = True
         if assignee:
             card['assignee'] = assignee
         project_details = None
@@ -525,6 +531,11 @@ def update_card(card_id):
                 card_obj.pop('assignee', None)
         if links is not None:
             card_obj['links'] = _clean_links(links)
+        if 'meeting' in data:
+            if _truthy(data['meeting']):
+                card_obj['meeting'] = True
+            else:
+                card_obj.pop('meeting', None)
         if card_obj.get('project'):
             project_details = _find_project(conn, card_obj['project'])
             if project_details and project_details.get('color'):

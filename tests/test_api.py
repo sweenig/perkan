@@ -270,6 +270,19 @@ class ListCardsTests(Base):
         self.assertEqual(len(self.get('/api/cards?assignee=sam')['cards']), 1)
         self.assertEqual([c['id'] for c in self.get('/api/cards?query=ABOUT%20D1')['cards']], ['d1'])
 
+    def test_meeting_flag(self):
+        m = self.post(title='standup', column='todo', meeting='true')   # MCP clients send string booleans
+        self.assertTrue(m['meeting'])
+        self.assertNotIn('meeting', self.post(title='plain', column='todo'))
+        self.assertEqual([c['id'] for c in self.get('/api/cards?meeting=true')['cards']], [m['id']])
+        self.assertEqual(self.get('/api/cards?meeting=false')['total'], 5 + 1)
+        board = self.get('/api/board')
+        flagged = [k['id'] for col in board['columns'] for k in col['cards'] if k.get('meeting')]
+        self.assertEqual(flagged, [m['id']])
+        self.assertNotIn('meeting', self.put(m['id'], meeting=False))
+        self.assertTrue(self.put(m['id'], meeting=True)['meeting'])
+        self.assertTrue(self.put(m['id'], title='renamed')['meeting'])   # other edits keep the flag
+
     def test_bad_paging_is_rejected(self):
         for q in ('limit=-1', 'limit=abc', 'offset=-3'):
             self.assertEqual(self.c.get('/api/cards?' + q).status_code, 400, q)

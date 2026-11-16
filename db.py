@@ -25,7 +25,7 @@ DATA_DIR = os.environ.get('PERKAN_DATA_DIR') or os.path.join(os.path.dirname(__f
 DB_FILE = os.path.join(DATA_DIR, 'perkan.db')
 LEGACY_JSON = os.path.join(DATA_DIR, 'kanban.json')
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 ORDER_STEP = 1_000_000.0
 MIN_GAP = 1e-3   # below this, neighbouring order values are renumbered to make room
 
@@ -73,7 +73,8 @@ CREATE TABLE IF NOT EXISTS cards (
     color       TEXT NOT NULL,
     ord         REAL NOT NULL,
     created_at  TEXT,
-    sprint_id   TEXT REFERENCES sprints(id) ON DELETE SET NULL
+    sprint_id   TEXT REFERENCES sprints(id) ON DELETE SET NULL,
+    meeting     INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_cards_column_ord ON cards(column_id, ord);
 CREATE INDEX IF NOT EXISTS idx_cards_ord ON cards(ord);
@@ -177,6 +178,8 @@ def card_from_row(row, links, dates=None):
     card['order'] = float(row['ord'])
     if row['sprint_id']:
         card['sprint'] = row['sprint_id']
+    if row['meeting']:
+        card['meeting'] = True
     created = row['created_at']
     started, completed, since = (dates or {}).get(row['id'], (None, None, None))
     created = created or (dates or {}).get((row['id'], 'created'))
@@ -257,12 +260,13 @@ def resolve_column(conn, ref):
 
 
 def list_cards(conn, column=None, project=None, assignee=None, query=None,
-               limit=None, offset=0, include_hidden=False, sprint=None, include_closed=False):
+               limit=None, offset=0, include_hidden=False, sprint=None, include_closed=False, meeting=None):
     """Cards in global `ord` order, each tagged with its column id. Returns (cards, total).
 
     Cards in hidden columns are skipped unless include_hidden is set or `column`
     names the (hidden) column explicitly. Done cards of a closed sprint are skipped unless
     include_closed is set or `sprint` is given. `sprint` is a sprint id, "active" or "backlog".
+    `meeting` True keeps only meeting cards, False only the others.
     """
     where, params = [], []
     if column:
@@ -270,6 +274,9 @@ def list_cards(conn, column=None, project=None, assignee=None, query=None,
         params.append(column)
     elif not include_hidden:
         where.append('columns.hidden = 0')
+    if meeting is not None:
+        where.append('cards.meeting = ?')
+        params.append(1 if meeting else 0)
     if project:
         where.append('cards.project = ?')
         params.append(project)
@@ -346,20 +353,20 @@ def get_card(conn, card_id):
 
 def insert_card(conn, column_id, card):
     conn.execute(
-        'INSERT INTO cards (id, column_id, title, description, project, assignee, color, ord, created_at, sprint_id) '
-        'VALUES (?,?,?,?,?,?,?,?,?, (SELECT id FROM sprints WHERE id = ?))',   # unknown sprint ids become backlog
+        'INSERT INTO cards (id, column_id, title, description, project, assignee, color, ord, created_at, sprint_id, meeting) '
+        'VALUES (?,?,?,?,?,?,?,?,?, (SELECT id FROM sprints WHERE id = ?), ?)',   # unknown sprint ids become backlog
         (card['id'], column_id, card['title'], card.get('description', ''),
          card.get('project'), card.get('assignee'), card['color'], float(card['order']),
-         card.get('created_at'), card.get('sprint')))
+         card.get('created_at'), card.get('sprint'), 1 if card.get('meeting') else 0))
     set_links(conn, card['id'], card.get('links') or [])
 
 
 def update_card_row(conn, card, column_id=None):
     conn.execute(
-        'UPDATE cards SET title=?, description=?, project=?, assignee=?, color=?, ord=?, '
+        'UPDATE cards SET title=?, description=?, project=?, assignee=?, color=?, ord=?, meeting=?, '
         'column_id=COALESCE(?, column_id) WHERE id=?',
         (card['title'], card.get('description', ''), card.get('project'), card.get('assignee'),
-         card['color'], float(card['order']), column_id, card['id']))
+         card['color'], float(card['order']), 1 if card.get('meeting') else 0, column_id, card['id']))
     set_links(conn, card['id'], card.get('links') or [])
 
 
@@ -1559,6 +1566,13 @@ def _migrate_12_to_13(conn):
     logger.info('Migrated schema v12 -> v13: added settings and holidays')
 
 
+def _migrate_13_to_14(conn):
+    """v14 adds cards.meeting: the card came from a meeting on the user's calendar."""
+    if 'meeting' not in {r['name'] for r in conn.execute('PRAGMA table_info(cards)')}:
+        conn.execute('ALTER TABLE cards ADD COLUMN meeting INTEGER NOT NULL DEFAULT 0')
+    logger.info('Migrated schema v13 -> v14: added cards.meeting')
+
+
 def init(normalize, default_board):
     """Create or upgrade the database; on first run import kanban.json (or seed a blank board).
 
@@ -1580,7 +1594,7 @@ def init(normalize, default_board):
         version = conn.execute('PRAGMA user_version').fetchone()[0]
         if version >= SCHEMA_VERSION:
             return
-        if version in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12):
+        if version in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13):
             if version == 1:
                 _migrate_1_to_2(conn)
             if version <= 2:
@@ -1603,7 +1617,9 @@ def init(normalize, default_board):
                 _migrate_10_to_11(conn)
             if version <= 11:
                 _migrate_11_to_12(conn)
-            _migrate_12_to_13(conn)
+            if version <= 12:
+                _migrate_12_to_13(conn)
+            _migrate_13_to_14(conn)
         else:
             if os.path.exists(LEGACY_JSON):
                 with open(LEGACY_JSON, 'r', encoding='utf-8') as f:
