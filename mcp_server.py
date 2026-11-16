@@ -158,6 +158,10 @@ def _tool_get_card_history(args):
     return _api('GET', f"/api/card/{args.get('id', '')}/history")
 
 
+def _tool_add_card_note(args):
+    return _api('POST', f"/api/card/{args.get('id', '')}/notes", {'text': args.get('text')})
+
+
 def _tool_get_card_stats(args):
     return _api('GET', _with_query('/api/stats', args, ['project', 'sprint', 'created_since', 'completed_since', 'cards']))
 
@@ -266,6 +270,11 @@ TOOLS = [
                          "with stays and counts_as_work per column and work_minutes, the sum over columns marked Counts as "
                          "work. It is {known: false, reason} for cards with no recorded column history, never zeros.",
      _obj({'id': _STR}, ['id']), _tool_get_card_history),
+    ('add_card_note', "Append a timestamped progress note to a card without resending its description. Returns the "
+                      "card id and the new note ({id, at, text, source}), not the card. Notes are listed under "
+                      "'notes' in get_card_history and shown on the card. Use it instead of update_card for progress "
+                      "notes; notes cannot be edited or deleted.",
+     _obj({'id': _STR, 'text': dict(_STR, description='The note text.')}, ['id', 'text']), _tool_add_card_note),
     ('get_card_stats', 'Durations in days per card plus summaries (n, avg, median, min, max). backlog_days = '
                        'created to started; work_days = started to completed; lead_days = created to completed; '
                        'in_column_days = time in the current column for cards not in a done column '

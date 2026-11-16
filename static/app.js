@@ -1068,7 +1068,10 @@ async function renderCardTimeline(card, isNew){
     const rows = h.history.map(e =>
       `<li><span class="tl-at">${fmtDateTime(e.at)}</span> ${e.from ? name(e.from) + ' → ' : 'Created in '}${name(e.to)}` +
       `<span class="tl-src">${escapeHtml(e.source)}</span></li>`).join('');
+    const notes = (h.notes || []).map(n =>
+      `<li><span class="tl-at">${fmtDateTime(n.at)}</span> ${escapeHtml(n.text)}<span class="tl-src">${escapeHtml(n.source)}</span></li>`).join('');
     box.innerHTML = `
+      ${notes ? `<div class="timeline-header"><span>Notes</span></div><ul class="timeline-list notes-list">${notes}</ul>` : ''}
       <div class="timeline-header"><span>Timeline</span></div>
       <div class="timeline-dates">
         <span>Created: <b>${h.created_at ? fmtDay(h.created_at) : '—'}</b></span>
