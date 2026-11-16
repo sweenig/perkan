@@ -1609,6 +1609,11 @@ class PageTests(Base):
         self.assertIn(b'.card-toggle', self.c.get('/static/style.css').data)
         self.assertIn(b'id="truncateBtn"', self.c.get('/').data)
 
+    def test_truncated_card_hides_description_entirely(self):
+        css = self.c.get('/static/style.css').data
+        self.assertIn(b'.card.card-truncated .card-desc{display:none}', css)
+        self.assertNotIn(b'line-clamp', css)
+
     def test_sprints_page_has_the_backlog_add_card_dialog(self):
         page = self.c.get('/sprints').data
         for ident in (b'id="cardDialog"', b'id="ncTitle"', b'id="ncProject"', b'id="ncAssignee"', b'id="ncDescription"'):

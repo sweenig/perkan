@@ -32,7 +32,7 @@ header{display:flex;flex-direction:column;gap:10px;padding:14px 20px;background:
 .card.card-truncated{max-height:175px}
 .card .card-title{font-weight:600}
 .card .card-desc{word-break:break-word;overflow-wrap:anywhere;flex:1;min-height:0}
-.card.card-truncated .card-desc{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;text-overflow:ellipsis}
+.card.card-truncated .card-desc{display:none}
 .card-footer{display:flex;align-items:center;gap:4px;margin-top:8px;flex-shrink:0}
 .card-footer-left{flex:1;display:flex;justify-content:flex-start;align-items:center}
 .card-footer-center{flex:1;display:flex;justify-content:center;align-items:center}
