@@ -91,6 +91,8 @@ function collectProjectCounts(board){
     }
     if(!Array.isArray(col.cards)) return;
     col.cards.forEach(card => {
+      // with "Current sprint" on, only offer (and count) projects that have a card in the active sprint
+      if(sprintOnlyEnabled && !(board.active_sprint && card && card.sprint === board.active_sprint)) return;
       const projectName = card && card.project ? card.project.trim() : '';
       if(!projectName) return;
       counts.set(projectName, (counts.get(projectName) || 0) + 1);
