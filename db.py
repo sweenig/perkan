@@ -25,7 +25,7 @@ DATA_DIR = os.environ.get('PERKAN_DATA_DIR') or os.path.join(os.path.dirname(__f
 DB_FILE = os.path.join(DATA_DIR, 'perkan.db')
 LEGACY_JSON = os.path.join(DATA_DIR, 'kanban.json')
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 ORDER_STEP = 1_000_000.0
 MIN_GAP = 1e-3   # below this, neighbouring order values are renumbered to make room
 
@@ -103,6 +103,14 @@ CREATE TABLE IF NOT EXISTS card_sprint_history (
     source      TEXT NOT NULL DEFAULT 'api'
 );
 CREATE INDEX IF NOT EXISTS idx_card_sprint_history_card ON card_sprint_history(card_id, id);
+CREATE TABLE IF NOT EXISTS card_notes (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    card_id TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+    at      TEXT NOT NULL,
+    text    TEXT NOT NULL,
+    source  TEXT NOT NULL DEFAULT 'api'
+);
+CREATE INDEX IF NOT EXISTS idx_card_notes_card ON card_notes(card_id, id);
 
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
@@ -374,6 +382,20 @@ def set_links(conn, card_id, links):
     conn.execute('DELETE FROM card_links WHERE card_id = ?', (card_id,))
     conn.executemany('INSERT INTO card_links (card_id, idx, text, url) VALUES (?,?,?,?)',
                      [(card_id, i, l['text'], l['url']) for i, l in enumerate(links)])
+
+
+# ---------------------------------------------------------------- progress notes
+
+def add_card_note(conn, card_id, text, source='api'):
+    """Append a timestamped note; the card's description is not touched. Returns the new note."""
+    at = now_iso()
+    cur = conn.execute('INSERT INTO card_notes (card_id, at, text, source) VALUES (?,?,?,?)', (card_id, at, text, source))
+    return {'id': cur.lastrowid, 'at': at, 'text': text, 'source': source}
+
+
+def card_notes(conn, card_id):
+    return [dict(r) for r in conn.execute(
+        'SELECT id, at, text, source FROM card_notes WHERE card_id = ? ORDER BY id', (card_id,))]
 
 
 # ---------------------------------------------------------------- column-change history
@@ -699,7 +721,9 @@ def replace_board(conn, board):
         'SELECT card_id, from_column, to_column, at, source FROM card_history ORDER BY id')]
     kept_sprint = [tuple(r) for r in conn.execute(
         'SELECT card_id, from_sprint, to_sprint, at, source FROM card_sprint_history ORDER BY id')]
+    kept_notes = [tuple(r) for r in conn.execute('SELECT card_id, at, text, source FROM card_notes ORDER BY id')]
     created = {r['id']: r['created_at'] for r in conn.execute('SELECT id, created_at FROM cards')}
+    conn.execute('DELETE FROM card_notes')
     conn.execute('DELETE FROM card_links')
     conn.execute('DELETE FROM cards')
     if 'sprints' in board:      # an import without the key leaves the sprints alone
@@ -732,6 +756,8 @@ def replace_board(conn, board):
     conn.executemany(
         'INSERT INTO card_sprint_history (card_id, from_sprint, to_sprint, at, source) VALUES (?,?,?,?,?)',
         [h for h in kept_sprint if h[0] in new_ids])
+    conn.executemany('INSERT INTO card_notes (card_id, at, text, source) VALUES (?,?,?,?)',
+                     [n for n in kept_notes if n[0] in new_ids])
     backfill_done_dates(conn)
 
 
@@ -1573,6 +1599,15 @@ def _migrate_13_to_14(conn):
     logger.info('Migrated schema v13 -> v14: added cards.meeting')
 
 
+def _migrate_14_to_15(conn):
+    """v15 adds card_notes: timestamped progress notes kept apart from the card description."""
+    conn.execute('CREATE TABLE IF NOT EXISTS card_notes (id INTEGER PRIMARY KEY AUTOINCREMENT, '
+                 'card_id TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE, at TEXT NOT NULL, '
+                 "text TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'api')")
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_card_notes_card ON card_notes(card_id, id)')
+    logger.info('Migrated schema v14 -> v15: added card_notes')
+
+
 def init(normalize, default_board):
     """Create or upgrade the database; on first run import kanban.json (or seed a blank board).
 
@@ -1594,7 +1629,7 @@ def init(normalize, default_board):
         version = conn.execute('PRAGMA user_version').fetchone()[0]
         if version >= SCHEMA_VERSION:
             return
-        if version in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13):
+        if version in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14):
             if version == 1:
                 _migrate_1_to_2(conn)
             if version <= 2:
@@ -1619,7 +1654,9 @@ def init(normalize, default_board):
                 _migrate_11_to_12(conn)
             if version <= 12:
                 _migrate_12_to_13(conn)
-            _migrate_13_to_14(conn)
+            if version <= 13:
+                _migrate_13_to_14(conn)
+            _migrate_14_to_15(conn)
         else:
             if os.path.exists(LEGACY_JSON):
                 with open(LEGACY_JSON, 'r', encoding='utf-8') as f:

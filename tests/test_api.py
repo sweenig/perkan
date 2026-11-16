@@ -40,6 +40,7 @@ class Base(unittest.TestCase):
         with db.write() as conn:
             conn.execute('DELETE FROM card_history')   # replace_board keeps history of surviving card ids
             conn.execute('DELETE FROM card_sprint_history')
+            conn.execute('DELETE FROM card_notes')
             conn.execute('DELETE FROM sprints')
             db.replace_board(conn, perkan._normalize_board(board_fixture()))
         self.c = perkan.app.test_client()
@@ -327,6 +328,51 @@ class McpTests(Base):
         self.assertEqual(self.call('get_card_sprint_history', id=card['id'])['sprint'], sp['id'])
         self.call('update_sprint', id=out['next_sprint']['id'], goal='Ship it')
         self.call('delete_sprint', id=out['next_sprint']['id'])
+
+
+class CardNoteTests(Base):
+    def note(self, card_id, text):
+        return self.c.post(f'/api/card/{card_id}/notes', json={'text': text})
+
+    def test_note_added_description_untouched(self):
+        before = self.get('/api/cards?query=t1')['cards'][0]
+        r = self.note('t1', ' halfway there ')
+        self.assertEqual(r.status_code, 201, r.data)
+        body = r.get_json()
+        self.assertEqual(set(body), {'id', 'note'})          # the note and the card id, not the card
+        self.assertEqual(body['id'], 't1')
+        self.assertEqual(body['note']['text'], 'halfway there')
+        self.assertRegex(body['note']['at'], r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$')
+        self.assertEqual(self.get('/api/cards?query=t1')['cards'][0]['description'], before['description'])
+
+    def test_notes_listed_oldest_first_in_history(self):
+        self.note('t1', 'one')
+        self.note('t1', 'two')
+        notes = self.get('/api/card/t1/history')['notes']
+        self.assertEqual([n['text'] for n in notes], ['one', 'two'])
+        self.assertEqual(self.get('/api/card/t2/history')['notes'], [])
+
+    def test_unknown_card_and_empty_text_are_errors(self):
+        self.assertEqual(self.note('nope', 'x').status_code, 404)
+        self.assertEqual(self.note('t1', '   ').status_code, 400)
+        self.assertEqual(self.c.post('/api/card/t1/notes', json={}).status_code, 400)
+
+    def test_notes_survive_merge_import_and_card_delete_removes_them(self):
+        self.note('t1', 'keep me')
+        r = self.c.post('/api/board/import', data={'mode': 'merge', 'file': (io.BytesIO(b'{"columns": []}'), 'b.json')},
+                        content_type='multipart/form-data')
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(self.get('/api/card/t1/history')['notes'][0]['text'], 'keep me')
+        self.assertEqual(self.c.delete('/api/card/t1').status_code, 200)
+        with db.read() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM card_notes WHERE card_id = 't1'").fetchone()[0], 0)
+
+    def test_mcp_tool(self):
+        r = self.c.post('/mcp', json={'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+                                      'params': {'name': 'add_card_note', 'arguments': {'id': 't1', 'text': 'via mcp'}}})
+        res = r.get_json()['result']['structuredContent']
+        self.assertEqual(res['note']['source'], 'mcp')
+        self.assertEqual(res['id'], 't1')
 
 
 class HistoryTests(InActiveSprint, Base):

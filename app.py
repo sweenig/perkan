@@ -601,10 +601,26 @@ def card_history(card_id):
             return jsonify({'error': 'card not found'}), 404
         history = db.card_history(conn, card_id)
         time_in_columns = db.card_time_in_columns(conn, card_id)
+        notes = db.card_notes(conn, card_id)
     return jsonify({'id': card_id, 'column': column_id, 'created_at': card.get('created_at'),
                     'started_at': card.get('started_at'), 'completed_at': card.get('completed_at'),
                     'column_since': card.get('column_since'), 'history': history,
-                    'time_in_columns': time_in_columns})
+                    'time_in_columns': time_in_columns, 'notes': notes})
+
+
+@app.route('/api/card/<card_id>/notes', methods=['POST'])
+def add_card_note(card_id):
+    """Append a progress note to a card without touching its description. Returns the note, not the card."""
+    data = request.get_json(silent=True)
+    text = data.get('text') if isinstance(data, dict) else None
+    if not isinstance(text, str) or not text.strip():
+        return jsonify({'error': 'text required'}), 400
+    with db.write() as conn:
+        card, _column_id = db.get_card(conn, card_id)
+        if card is None:
+            return jsonify({'error': 'card not found'}), 404
+        note = db.add_card_note(conn, card_id, text.strip(), _source())
+    return jsonify({'id': card_id, 'note': note}), 201
 
 
 @app.route('/api/card/<card_id>', methods=['DELETE'])
