@@ -342,7 +342,7 @@ function createCardElement(card, projectMap) {
     <div class="card-footer">
       <div class="card-footer-left">
         ${linkCount > 0 ? `<div class="card-links" title="${linkCount} link${linkCount!==1?'s':''}">🔗 ${linkCount}</div>` : ''}
-        ${card.meeting ? `<div class="card-meeting" title="Came from a meeting on the calendar">📅 meeting</div>` : ''}
+        ${card.meeting ? `<div class="card-meeting" title="Came from a meeting on the calendar" aria-label="Meeting">📅</div>` : ''}
         ${card.column_since ? `<div class="card-age" title="In this column since ${fmtDateTime(card.column_since)}">⏱ ${fmtAge(card.column_since)}</div>` : ''}
         ${card.added_after_start ? `<div class="card-added" title="Added to its sprint after the sprint started${card.added_to_sprint_at ? ' (' + fmtDateTime(card.added_to_sprint_at) + ')' : ''}">＋ added mid-sprint</div>` : ''}
       </div>
