@@ -1,7 +1,7 @@
 // Sprint planning page: active sprint on top, planned sprints below it, then the backlog
 // (and closed sprints on request). Cards can be dragged between sections and reordered.
 
-const state = { sprints: [], cards: [], columns: {}, projects: [], today: '', showClosed: false, dragId: null, project: null };
+const state = { sprints: [], cards: [], columns: {}, projects: [], today: '', showClosed: false, hideDone: false, dragId: null, project: null };
 const $ = (id) => document.getElementById(id);
 
 async function api(method, url, body) {
@@ -212,6 +212,7 @@ function backlogSection() {
 
 function listFor(box, items, sprintId, closed) {
   const ul = el('ul', 'sp-list');
+  if (state.hideDone) items = items.filter((c) => !isDone(c));
   if (!items.length) ul.appendChild(el('li', 'sp-empty', closed ? 'No cards.' : 'Drop cards here.'));
   items.forEach((card) => ul.appendChild(cardRow(card, closed)));
   return ul;
@@ -395,6 +396,15 @@ $('newSprintBtn').addEventListener('click', () => openSprintDialog(null));
 // app.js closes its edit dialog after save, delete, duplicate or cancel; reload so the rows show the result.
 document.addEventListener('cardEditClosed', () => load());
 $('showClosed').addEventListener('change', (e) => { state.showClosed = e.target.checked; renderSprints(); });
+
+// Remembered across page loads, like the truncate toggle on the list page.
+try { state.hideDone = localStorage.getItem('sprintsHideDone') === 'true'; } catch (e) { /* storage unavailable */ }
+$('hideDone').checked = state.hideDone;
+$('hideDone').addEventListener('change', (e) => {
+  state.hideDone = e.target.checked;
+  try { localStorage.setItem('sprintsHideDone', state.hideDone); } catch (err) { /* ignore */ }
+  renderSprints();
+});
 document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => b.closest('dialog').close()));
 
 $('sprintForm').addEventListener('submit', async (e) => {
