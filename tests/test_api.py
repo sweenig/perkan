@@ -1539,6 +1539,14 @@ class CardTimeTests(Base):
         with db.read() as conn:
             return db.card_time_in_columns(conn, cid, now=now or self.NOW)
 
+    def test_board_cards_carry_work_minutes(self):
+        self.c.put('/api/column/doing', json={'counts_as_work': True})
+        self.history('t1', [('todo', '07:00', 'api'), ('doing', '07:46', 'api'), ('archive', '12:14', 'api')])
+        with db.read() as conn:
+            board = db.load_board(conn)
+        card = next(c for col in board['columns'] for c in col['cards'] if c['id'] == 't1')
+        self.assertEqual(card['work_minutes'], 268)          # the waiting stay in Archive adds nothing
+
     def test_hand_calculation_repeated_stays_and_waiting_time(self):
         self.c.put('/api/column/doing', json={'counts_as_work': True})
         self.history('t1', [('todo', '07:00', 'api'), ('doing', '07:46', 'api'), ('archive', '12:14', 'api'),
