@@ -15,9 +15,8 @@ function fmtDay(iso){
   if(iso.endsWith('T00:00:00Z')) return iso.slice(0, 10);
   return new Date(iso).toLocaleDateString('sv-SE');
 }
-// Compact age of a timestamp: 5m, 3h, 12d.
-function fmtAge(iso){
-  const mins = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
+// Compact duration of N minutes: 5m, 3h, 12d.
+function fmtMinutes(mins){
   if(mins < 60) return mins + 'm';
   if(mins < 60 * 24) return Math.floor(mins / 60) + 'h';
   return Math.floor(mins / (60 * 24)) + 'd';
@@ -352,7 +351,7 @@ function createCardElement(card, projectMap) {
       <div class="card-footer-left">
         ${linkCount > 0 ? `<div class="card-links" title="${linkCount} link${linkCount!==1?'s':''}">🔗 ${linkCount}</div>` : ''}
         ${card.meeting ? `<div class="card-meeting" title="Came from a meeting on the calendar" aria-label="Meeting">📅</div>` : ''}
-        ${card.column_since ? `<div class="card-age" title="In this column since ${fmtDateTime(card.column_since)}">⏱ ${fmtAge(card.column_since)}</div>` : ''}
+        ${card.work_minutes !== undefined ? `<div class="card-age" title="Total time worked (time in columns that count as work). In this column since ${fmtDateTime(card.column_since)}">⏱ ${fmtMinutes(card.work_minutes)}</div>` : ''}
         ${card.added_after_start ? `<div class="card-added" title="Added to its sprint after the sprint started${card.added_to_sprint_at ? ' (' + fmtDateTime(card.added_to_sprint_at) + ')' : ''}">＋ added mid-sprint</div>` : ''}
       </div>
       <div class="card-footer-center">

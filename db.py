@@ -229,6 +229,10 @@ def load_board(conn, include_hidden=False, include_closed=False):
         if row['id'] in adds:
             card['added_after_start'] = True
             card['added_to_sprint_at'] = adds[row['id']]
+        # total time worked, computed here so the board JSON changes as it grows and auto-refresh repaints it
+        worked = card_time_in_columns(conn, row['id'])
+        if worked['known']:
+            card['work_minutes'] = worked['work_minutes']
         by_id[row['column_id']]['cards'].append(card)
 
     return {'columns': columns, 'projects': list_projects(conn), 'active_sprint': active_sprint(conn)}

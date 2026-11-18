@@ -39,6 +39,8 @@ Every card has one global `order` (unique, lowest first). Moving a card to anoth
 
 Every column change is recorded (`GET /api/card/<id>/history`). From that, cards carry `created_at`, `started_at` (first move out of the starting column), `completed_at` (last entry into a done column; clears if the card leaves) and `column_since`.
 
+The ⏱ on a card is its total time worked: `work_minutes` on every board card, the wall-clock time spent in columns marked Counts as work (the open stretch counts up to now). The server computes it so auto-refresh repaints it as it grows; cards with no recorded column history show no ⏱. Time in the current column is in the card's history (`column_since`).
+
 `GET /api/stats` (MCP: `get_card_stats`) turns these into durations in days (backlog, work, lead, time in current column) with summaries overall and per project and sprint. Filters: `project`, `sprint`, `created_since`, `completed_since`.
 
 A column counts as done when `is_done` is set on it. `column: "done"` in `create_card` / `update_card` means the one marked `is_current_done`.
