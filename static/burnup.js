@@ -27,7 +27,11 @@ function svg(tag, attrs, text) {
   return e;
 }
 
-const fmtMinutes = (n) => `${Number(n).toLocaleString()} min`;
+// 45 -> "45 min", 1988 -> "33.1 h": from an hour up, hours read better than a long minute count
+const fmtMinutes = (n) => (n < 60 ? `${Number(n).toLocaleString()} min` : `${fmtHours(n)} h`);
+const fmtHours = (n) => (n / 60).toLocaleString(undefined, { maximumFractionDigits: 1 });
+// the same, with the exact minutes alongside once it is shown in hours: "33.1 h (1,988 min)"
+const fmtMinutesBoth = (n) => (n < 60 ? fmtMinutes(n) : `${fmtMinutes(n)} (${Number(n).toLocaleString()} min)`);
 
 function fmtHM(n) {
   const h = Math.floor(n / 60), m = n % 60;
@@ -157,12 +161,12 @@ function render(data) {
   if (!data.days.length) return;
 
   $('buTotal').hidden = false;
-  $('buTotalValue').textContent = fmtMinutes(data.total_minutes);
+  $('buTotalValue').textContent = fmtMinutesBoth(data.total_minutes);
   const hasAdded = (data.additions || []).length > 0;
   $('buSplit').hidden = !hasAdded;
   if (hasAdded) {
     const pct = data.total_minutes ? Math.round((data.added_minutes / data.total_minutes) * 100) : 0;
-    $('buSplit').textContent = `${fmtMinutes(data.planned_minutes)} planned · ${fmtMinutes(data.added_minutes)} added mid-sprint (${pct}%)`;
+    $('buSplit').textContent = `${fmtMinutesBoth(data.planned_minutes)} planned · ${fmtMinutesBoth(data.added_minutes)} added mid-sprint (${pct}%)`;
   }
   $('buLegend').hidden = !hasAdded;
   renderLegend(data);
@@ -219,6 +223,7 @@ function drawChart(data) {
   const maxV = Math.max(...points.map((p) => p.minutes), 0);
   const step = niceStep(Math.max(maxV, 30));
   const top = Math.max(step, Math.ceil(maxV / step) * step);
+  const hours = step >= 60;                       // gridline steps of an hour or more are labelled in hours
   const x = (frac) => M.l + frac * IW;
   const y = (v) => M.t + IH - (v / top) * IH;
   const pts = points.map((p) => [x(xFraction(p.at, data.bands)), y(p.minutes)]);
@@ -228,9 +233,9 @@ function drawChart(data) {
 
   for (let v = 0; v <= top; v += step) {
     chart.appendChild(svg('line', { class: v === 0 ? 'bu-axis' : 'bu-grid', x1: M.l, x2: M.l + IW, y1: y(v), y2: y(v) }));
-    chart.appendChild(svg('text', { class: 'bu-axis-text', x: M.l - 8, y: y(v) + 4, 'text-anchor': 'end' }, v.toLocaleString()));
+    chart.appendChild(svg('text', { class: 'bu-axis-text', x: M.l - 8, y: y(v) + 4, 'text-anchor': 'end' }, hours ? (v / 60).toLocaleString() : v.toLocaleString()));
   }
-  chart.appendChild(svg('text', { class: 'bu-axis-title', transform: `translate(14 ${M.t + IH / 2}) rotate(-90)`, 'text-anchor': 'middle' }, 'Minutes spent (cumulative)'));
+  chart.appendChild(svg('text', { class: 'bu-axis-title', transform: `translate(14 ${M.t + IH / 2}) rotate(-90)`, 'text-anchor': 'middle' }, hours ? 'Hours spent (cumulative)' : 'Minutes spent (cumulative)'));
 
   // non-working time (only sent while it is shown) is shaded gray behind everything else
   (data.non_working || []).forEach((seg) => {
@@ -300,7 +305,7 @@ function drawChart(data) {
     tip.replaceChildren();
     tip.appendChild(el('div', 'bu-tip-day', pointLabel(p)));
     const row = el('div', 'bu-tip-row');
-    row.append(el('span', 'bu-tip-key'), el('span', 'bu-tip-value', fmtMinutes(p.minutes)), el('span', 'bu-tip-day', `(${fmtHM(p.minutes)})`));
+    row.append(el('span', 'bu-tip-key'), el('span', 'bu-tip-value', fmtMinutes(p.minutes)), ...(p.minutes >= 60 ? [el('span', 'bu-tip-day', `(${p.minutes.toLocaleString()} min)`)] : []));
     tip.appendChild(row);
     if (hasAdded) {
       const r1 = el('div', 'bu-tip-row'), r2 = el('div', 'bu-tip-row');
@@ -311,7 +316,7 @@ function drawChart(data) {
       additions.filter((a) => Date.parse(a.at) > prevAt && Date.parse(a.at) <= Date.parse(p.at))
         .forEach((a) => tip.appendChild(el('div', 'bu-tip-day', `▲ ${a.title} added`)));
     }
-    if (i > 0) tip.appendChild(el('div', 'bu-tip-day', `+${(p.minutes - points[i - 1].minutes).toLocaleString()} min since the previous point`));
+    if (i > 0) tip.appendChild(el('div', 'bu-tip-day', `+${fmtMinutes(p.minutes - points[i - 1].minutes)} since the previous point`));
     tip.hidden = false;
     const box = chart.getBoundingClientRect();
     const scale = box.width / W;
