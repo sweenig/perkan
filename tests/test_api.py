@@ -1227,6 +1227,42 @@ class BurnupTests(Base):
         e = next(c for c in out['cards'] if c['title'] == 'E')
         self.assertIn('no sprint history', e['note'])
 
+    def test_minutes_split_into_planned_and_added_mid_sprint(self):
+        # the sprint was started at the start of 11-02: only C came in after that (11-03 08:00)
+        with db.write() as conn:
+            conn.execute("UPDATE sprints SET started_at = '2026-11-02T00:00:00Z' WHERE id = ?", (self.sid,))
+        out = self.burnup()
+        self.assertEqual(out['total_minutes'], 4500)
+        self.assertEqual((out['planned_minutes'], out['added_minutes']), (4500 - 1680, 1680))
+        self.assertEqual([(p['planned_minutes'], p['added_minutes']) for p in out['points']],
+                         [(0, 0), (1260, 0), (3060 - 960, 960), (4500 - 1680, 1680)])
+        self.assertEqual({c['title']: c['added'] for c in out['cards']},
+                         {'A': False, 'C': True, 'E': False, 'F': False, 'B': False})   # entered at started_at is planned
+        self.assertEqual(out['additions'], [{'id': self.ids['C'], 'title': 'C', 'at': '2026-11-03T08:00:00Z'}])
+        for kw in ({'step': 'day'}, {'step': 'hour'}, {'step': 'hour', 'hide_non_working': True}):
+            with db.read() as conn:
+                out = db.sprint_burnup(conn, self.sid, now=self.NOW, **kw)
+            for p in out['points']:                                   # the two series always add up to the total line
+                self.assertEqual(p['planned_minutes'] + p['added_minutes'], p['minutes'], kw)
+            self.assertEqual(out['planned_minutes'] + out['added_minutes'], out['total_minutes'])
+            self.assertEqual(out['added_minutes'], 1680)
+            added = [p['added_minutes'] for p in out['points']]
+            self.assertEqual(added, sorted(added))                    # cumulative: never falls
+        api = self.get(f'/api/sprint/{self.sid}/burnup')          # the route uses the real clock, so only the shape is fixed
+        self.assertEqual(api['planned_minutes'] + api['added_minutes'], api['total_minutes'])
+        self.assertEqual([a['title'] for a in api['additions']], ['C'])
+
+    def test_a_sprint_with_no_additions_is_all_planned(self):
+        with db.write() as conn:
+            conn.execute("UPDATE sprints SET started_at = '2026-11-03T09:00:00Z' WHERE id = ?", (self.sid,))   # after every entry
+        out = self.burnup()
+        self.assertEqual((out['planned_minutes'], out['added_minutes'], out['additions']), (out['total_minutes'], 0, []))
+        self.assertGreater(out['total_minutes'], 0)
+        self.assertTrue(all(p['added_minutes'] == 0 for p in out['points']))
+        with db.write() as conn:
+            conn.execute("UPDATE sprints SET started_at = NULL WHERE id = ?", (self.sid,))
+        self.assertEqual(self.burnup()['added_minutes'], 0)        # no start moment: nothing can be "after" it
+
     def test_no_work_column_and_unstarted_sprint_say_so(self):
         self.c.put('/api/column/doing', json={'counts_as_work': False})
         out = self.burnup()
@@ -1269,7 +1305,7 @@ class BurnupTests(Base):
         self.assertIn('no active sprint', r.get_json()['error'])
         page = self.c.get('/burnup')
         self.assertEqual(page.status_code, 200)
-        for needle in (b'id="buChart"', b'burnup.js', b'burnup.css', b'<select id="buTitle"', b'id="buSteps"'):
+        for needle in (b'id="buChart"', b'burnup.js', b'burnup.css', b'<select id="buTitle"', b'id="buSteps"', b'id="buLegend"', b'id="buSplit"'):
             self.assertIn(needle, page.data)
         for url in ('/', '/list', '/sprints', '/settings', '/burnup'):
             self.assertIn(b'href="/burnup"' if url != '/burnup' else b'Burn-up', self.c.get(url).data, url)

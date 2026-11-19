@@ -1051,6 +1051,12 @@ def sprint_burnup(conn, sprint_id, now=None, step='day', hide_non_working=None):
     summed across cards. Cards with no observed column history are returned as unknown, never as 0; cards in
     the sprint with no sprint history count for the whole window and are flagged.
 
+    The minutes are also split by how a card got into this sprint: planned (it was in the sprint when the
+    sprint was started, or has no sprint history) or added (its latest move into the sprint came after
+    started_at, the same rule as mid_sprint_additions). Every point carries `planned_minutes` and
+    `added_minutes`, which add up to `minutes`; so do `planned_minutes` and `added_minutes` at the top level
+    and `total_minutes`. Each card has `added`, and `additions` lists the added cards with the time each came in.
+
     step is 'day' (a point at the end of every finished day) or 'hour' (a point every hour from the start
     of the first day). Either way there is an origin point and, while the sprint runs, a last point at
     `now`. Every point carries `local`, its wall-clock time in PERKAN_TZ; `day_edges` are the local
@@ -1082,6 +1088,7 @@ def sprint_burnup(conn, sprint_id, now=None, step='day', hide_non_working=None):
            'unit': 'minutes', 'step': step, 'tz': getattr(zone, 'key', 'UTC'), 'as_of': _iso(now),
            'hide_non_working': hide, 'hidden_days': 0, 'non_working': [],
            'days': [], 'day_edges': [], 'bands': [], 'points': [], 'total_minutes': 0,
+           'planned_minutes': 0, 'added_minutes': 0, 'additions': [],
            'cards': [], 'unknown': [], 'notes': []}
     if not row['start_date']:
         out['notes'].append('This sprint has no start date yet (it starts when it is started).')
@@ -1152,16 +1159,19 @@ def sprint_burnup(conn, sprint_id, now=None, step='day', hide_non_working=None):
             seen.add(cid)
             card_ids.append(cid)
 
+    started_at = _parse_ts(row['started_at']) if row['started_at'] else None
     all_segments = []      # (start, end) of counted time across all cards
+    added_segments = []    # the part of all_segments that belongs to cards added after the sprint started
     for cid in card_ids:
         card = conn.execute('SELECT title, sprint_id FROM cards WHERE id = ?', (cid,)).fetchone()
         if card is None:
             continue
         # when was the card in this sprint?
-        member, open_since, entered = [], None, False
+        member, open_since, entered, came_in = [], None, False, None
         for r in conn.execute('SELECT from_sprint, to_sprint, at FROM card_sprint_history WHERE card_id = ? ORDER BY id', (cid,)):
             if r['to_sprint'] == sprint_id:
                 open_since, entered = _parse_ts(r['at']), True
+                came_in = open_since
             elif r['from_sprint'] == sprint_id:
                 member.append((open_since or window_start, _parse_ts(r['at'])))
                 open_since = None
@@ -1173,6 +1183,9 @@ def sprint_burnup(conn, sprint_id, now=None, step='day', hide_non_working=None):
         # where was the card, and when?
         hist = conn.execute('SELECT to_column, at, source FROM card_history WHERE card_id = ? ORDER BY id', (cid,)).fetchall()
         stays = _stays(hist, now)
+        added = bool(started_at and came_in and came_in > started_at)
+        if added:
+            out['additions'].append({'id': cid, 'title': card['title'], 'at': _iso(came_in)})
         if stays is None:
             out['unknown'].append({'id': cid, 'title': card['title'], 'reason': 'no recorded column history'})
             continue
@@ -1186,18 +1199,23 @@ def sprint_burnup(conn, sprint_id, now=None, step='day', hide_non_working=None):
                     counted.append((a, b))
         minutes = _overlap_minutes(counted, window_start, stop)
         all_segments.extend(counted)
-        entry = {'id': cid, 'title': card['title'], 'minutes': round(minutes)}
+        if added:
+            added_segments.extend(counted)
+        entry = {'id': cid, 'title': card['title'], 'minutes': round(minutes), 'added': added}
         if note:
             entry['note'] = note
         out['cards'].append(entry)
 
     out['cards'].sort(key=lambda c: (-c['minutes'], c['title'].lower()))
+    out['additions'].sort(key=lambda a: a['at'])
     # points: the origin, then the end of every finished day (or every hour), and a last point at the
     # moment the data stops while that is inside the sprint ("now" for a running sprint)
     def point(at, kind, day=None):
         local = at.astimezone(zone)
+        total = round(_overlap_minutes(all_segments, window_start, at))
+        added = min(total, round(_overlap_minutes(added_segments, window_start, at)))   # planned = the rest, so they add up
         return {'at': _iso(at), 'local': local.strftime('%Y-%m-%dT%H:%M'), 'day': day or local.strftime('%Y-%m-%d'),
-                'kind': kind, 'minutes': round(_overlap_minutes(all_segments, window_start, at))}
+                'kind': kind, 'minutes': total, 'planned_minutes': total - added, 'added_minutes': added}
 
     def closing(at):
         return 'end' if at >= window_end else ('now' if row['state'] == 'active' else 'closed')
@@ -1229,6 +1247,8 @@ def sprint_burnup(conn, sprint_id, now=None, step='day', hide_non_working=None):
             add(point(stop, closing(stop)))
     out['points'] = points
     out['total_minutes'] = points[-1]['minutes']
+    out['planned_minutes'] = points[-1]['planned_minutes']
+    out['added_minutes'] = points[-1]['added_minutes']
     return out
 
 

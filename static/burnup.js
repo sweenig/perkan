@@ -52,6 +52,15 @@ function fmtLocal(local) {
   return new Date(y, mo - 1, da, h, mi).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
+// a UTC instant ("2026-11-04T15:00:00Z") shown in the sprint's time zone
+function fmtLocalUtc(iso, tz) {
+  try {
+    return new Date(iso).toLocaleString(undefined, { timeZone: tz, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  } catch (e) {
+    return new Date(iso).toLocaleString();
+  }
+}
+
 function pointLabel(p) {
   switch (p.kind) {
     case 'start': return `Start of ${fmtDate(p.day)}`;
@@ -108,7 +117,7 @@ function buildSelect() {
 
 function reset() {
   ['buNotes', 'buDayTable', 'buCards', 'buUnknown', 'buChart'].forEach((id) => $(id).replaceChildren());
-  ['buChartWrap', 'buTotal', 'buDesc', 'buTableBtn', 'buHideBtn', 'buSteps', 'buCardsSection', 'buTip'].forEach((id) => { $(id).hidden = true; });
+  ['buChartWrap', 'buTotal', 'buSplit', 'buLegend', 'buDesc', 'buTableBtn', 'buHideBtn', 'buSteps', 'buCardsSection', 'buTip'].forEach((id) => { $(id).hidden = true; });
   $('buSub').textContent = '';
   $('buDesc').textContent = '';
   current = null;
@@ -149,6 +158,14 @@ function render(data) {
 
   $('buTotal').hidden = false;
   $('buTotalValue').textContent = fmtMinutes(data.total_minutes);
+  const hasAdded = (data.additions || []).length > 0;
+  $('buSplit').hidden = !hasAdded;
+  if (hasAdded) {
+    const pct = data.total_minutes ? Math.round((data.added_minutes / data.total_minutes) * 100) : 0;
+    $('buSplit').textContent = `${fmtMinutes(data.planned_minutes)} planned · ${fmtMinutes(data.added_minutes)} added mid-sprint (${pct}%)`;
+  }
+  $('buLegend').hidden = !hasAdded;
+  renderLegend(data);
   $('buChartWrap').hidden = false;
   $('buSteps').hidden = false;
   $('buHideBtn').hidden = false;
@@ -160,7 +177,9 @@ function render(data) {
   if (cols) {
     $('buDesc').hidden = false;
     $('buDesc').textContent = `Cumulative wall-clock minutes the sprint's cards spent in ${cols}, while they were in this sprint. ` +
-      'Cards in progress at the same time add up. ' + (data.step === 'hour' ? 'One point per hour.' : 'One point per finished day.') +
+      'Cards in progress at the same time add up. ' +
+      (hasAdded ? 'The solid area is time on cards that were in the sprint when it started; the hatched area on top is time on cards added after it started, and each ▲ marks a card being added. ' : '') +
+      (data.step === 'hour' ? 'One point per hour.' : 'One point per finished day.') +
       (!data.hide_non_working && (data.non_working || []).length ? ' Gray areas are non-working time.' : '') +
       (data.hide_non_working ? ' Non-working time is hidden; time tracked in it is included at the next working point, so the total does not change.' : '');
   }
@@ -181,6 +200,17 @@ function xFraction(iso, bands) {
   return 1;
 }
 
+// legend: only when cards were added mid-sprint (otherwise there is one series and nothing to tell apart)
+function renderLegend(data) {
+  const box = $('buLegend');
+  box.replaceChildren();
+  if (!(data.additions || []).length) return;
+  const item = (swatch, text) => { const i = el('span', 'bu-legend-item'); i.append(swatch, text); box.appendChild(i); };
+  item(el('span', 'bu-swatch bu-swatch-planned'), 'Planned into the sprint');
+  item(el('span', 'bu-swatch bu-swatch-added'), 'Added mid-sprint');
+  item(el('span', 'bu-swatch-mark', '▲'), 'A card was added');
+}
+
 function drawChart(data) {
   const chart = $('buChart');
   chart.replaceChildren();
@@ -192,6 +222,9 @@ function drawChart(data) {
   const x = (frac) => M.l + frac * IW;
   const y = (v) => M.t + IH - (v / top) * IH;
   const pts = points.map((p) => [x(xFraction(p.at, data.bands)), y(p.minutes)]);
+  const base = points.map((p, i) => [pts[i][0], y(p.planned_minutes)]);      // top of the planned series
+  const additions = data.additions || [];
+  const hasAdded = additions.length > 0;
 
   for (let v = 0; v <= top; v += step) {
     chart.appendChild(svg('line', { class: v === 0 ? 'bu-axis' : 'bu-grid', x1: M.l, x2: M.l + IW, y1: y(v), y2: y(v) }));
@@ -217,15 +250,40 @@ function drawChart(data) {
     chart.appendChild(t);
   });
 
-  const d = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ');
+  const line = (a) => a.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ');
+  const d = line(pts);
   const last = pts[pts.length - 1];
-  chart.appendChild(svg('path', { class: 'bu-area', d: `${d} L${last[0].toFixed(1)} ${y(0)} L${pts[0][0].toFixed(1)} ${y(0)} Z` }));
-  chart.appendChild(svg('path', { class: 'bu-line', d }));
+  if (hasAdded) {
+    // the added series is the band between the planned line and the total line; hatched so colour is not the only cue
+    const defs = svg('defs');
+    const pat = svg('pattern', { id: 'buHatch', width: 6, height: 6, patternUnits: 'userSpaceOnUse', patternTransform: 'rotate(45)' });
+    pat.appendChild(svg('rect', { class: 'bu-hatch-bg', width: 6, height: 6 }));
+    pat.appendChild(svg('line', { class: 'bu-hatch-line', x1: 0, y1: 0, x2: 0, y2: 6 }));
+    defs.appendChild(pat);
+    chart.appendChild(defs);
+  }
+  const lastBase = base[base.length - 1];
+  chart.appendChild(svg('path', { class: 'bu-area', d: `${line(base)} L${lastBase[0].toFixed(1)} ${y(0)} L${base[0][0].toFixed(1)} ${y(0)} Z` }));
+  if (hasAdded) {
+    chart.appendChild(svg('path', { class: 'bu-area-added', d: `${d} L${[...base].reverse().map((p) => `${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' L')} Z` }));
+    chart.appendChild(svg('path', { class: 'bu-line-added', d }));
+    chart.appendChild(svg('path', { class: 'bu-line', d: line(base) }));
+  } else {
+    chart.appendChild(svg('path', { class: 'bu-line', d }));
+  }
+  // one marker per card added mid-sprint, on the time axis
+  additions.forEach((a) => {
+    const mx = x(xFraction(a.at, data.bands));
+    const m = svg('path', { class: 'bu-add-mark', d: `M${(mx - 5).toFixed(1)} ${y(0)} L${(mx + 5).toFixed(1)} ${y(0)} L${mx.toFixed(1)} ${(y(0) - 9).toFixed(1)} Z` });
+    m.appendChild(svg('title', {}, `${a.title} added ${fmtLocalUtc(a.at, data.tz)}`));
+    chart.appendChild(m);
+  });
   const cross = svg('line', { class: 'bu-cross', y1: M.t, y2: M.t + IH, visibility: 'hidden' });
   const marker = svg('circle', { class: 'bu-dot', r: 5, visibility: 'hidden' });
   chart.appendChild(cross);
   chart.appendChild(svg('circle', { class: 'bu-dot', cx: last[0], cy: last[1], r: 5 }));
   chart.appendChild(svg('text', { class: 'bu-endlabel', x: last[0] + 12, y: last[1] + 4 }, fmtMinutes(points[points.length - 1].minutes)));
+  if (hasAdded && lastBase[1] - last[1] > 14) chart.appendChild(svg('text', { class: 'bu-endlabel bu-endlabel-sub', x: lastBase[0] + 12, y: lastBase[1] + 4 }, fmtMinutes(points[points.length - 1].planned_minutes) + ' planned'));
   chart.appendChild(marker);
 
   // hover and keyboard: the crosshair snaps to the nearest point; left/right arrows step through the points
@@ -244,6 +302,15 @@ function drawChart(data) {
     const row = el('div', 'bu-tip-row');
     row.append(el('span', 'bu-tip-key'), el('span', 'bu-tip-value', fmtMinutes(p.minutes)), el('span', 'bu-tip-day', `(${fmtHM(p.minutes)})`));
     tip.appendChild(row);
+    if (hasAdded) {
+      const r1 = el('div', 'bu-tip-row'), r2 = el('div', 'bu-tip-row');
+      r1.append(el('span', 'bu-tip-key'), el('span', '', `${fmtMinutes(p.planned_minutes)} planned`));
+      r2.append(el('span', 'bu-tip-key bu-tip-key-added'), el('span', '', `${fmtMinutes(p.added_minutes)} added mid-sprint`));
+      tip.append(r1, r2);
+      const prevAt = i > 0 ? Date.parse(points[i - 1].at) : -Infinity;
+      additions.filter((a) => Date.parse(a.at) > prevAt && Date.parse(a.at) <= Date.parse(p.at))
+        .forEach((a) => tip.appendChild(el('div', 'bu-tip-day', `▲ ${a.title} added`)));
+    }
     if (i > 0) tip.appendChild(el('div', 'bu-tip-day', `+${(p.minutes - points[i - 1].minutes).toLocaleString()} min since the previous point`));
     tip.hidden = false;
     const box = chart.getBoundingClientRect();
@@ -298,8 +365,11 @@ function renderTable(data) {
   const btn = $('buTableBtn');
   const box = $('buDayTable');
   btn.hidden = false;
-  const rows = data.points.map((p, i) => [pointLabel(p), p.minutes.toLocaleString(), i ? (p.minutes - data.points[i - 1].minutes).toLocaleString() : '']);
-  box.replaceChildren(table(['Point', 'Cumulative minutes', 'Added'], rows, 1));
+  const split = (data.additions || []).length > 0;       // the planned / added columns only matter once cards were added
+  const rows = data.points.map((p, i) => [pointLabel(p), p.minutes.toLocaleString(),
+    ...(split ? [p.planned_minutes.toLocaleString(), p.added_minutes.toLocaleString()] : []),
+    i ? (p.minutes - data.points[i - 1].minutes).toLocaleString() : '']);
+  box.replaceChildren(table(['Point', 'Cumulative minutes', ...(split ? ['Planned', 'Added mid-sprint'] : []), 'Change'], rows, 1));
   applyTable();
 }
 
@@ -313,8 +383,11 @@ function applyTable() {
 function renderCards(data) {
   if (!data.cards.length && !data.unknown.length) return;
   $('buCardsSection').hidden = false;
-  const rows = data.cards.map((c) => [c.title + (c.note ? `  (${c.note})` : ''), c.minutes.toLocaleString(), fmtHM(c.minutes)]);
-  if (rows.length) $('buCards').appendChild(table(['Card', 'Minutes', 'As h m'], rows, 1));
+  const split = (data.additions || []).length > 0;
+  const addedAt = Object.fromEntries((data.additions || []).map((a) => [a.id, a.at]));
+  const came = (c) => (c.added ? `Added ${fmtLocalUtc(addedAt[c.id], data.tz)}` : 'Planned');
+  const rows = data.cards.map((c) => [c.title + (c.note ? `  (${c.note})` : ''), ...(split ? [came(c)] : []), c.minutes.toLocaleString(), fmtHM(c.minutes)]);
+  if (rows.length) $('buCards').appendChild(table(['Card', ...(split ? ['Came in'] : []), 'Minutes', 'As h m'], rows, split ? 2 : 1));
   if (data.unknown.length) {
     $('buUnknown').appendChild(el('p', 'bu-sub-h', 'Time unknown (not counted, not zero):'));
     $('buUnknown').appendChild(table(['Card', 'Reason'], data.unknown.map((c) => [c.title, c.reason]), 99));

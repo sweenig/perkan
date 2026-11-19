@@ -31,13 +31,15 @@
           <div class="bu-total" id="buTotal" hidden>
             <span class="bu-total-value" id="buTotalValue"></span>
             <span class="bu-total-label">spent in the sprint so far</span>
+            <span class="bu-total-split" id="buSplit" hidden></span>
           </div>
         </div>
         <div id="buNotes"></div>
         <div id="buChartWrap" class="bu-chart-wrap" hidden>
-          <svg id="buChart" class="bu-chart" viewBox="0 0 900 360" role="img" tabindex="0" aria-label="Cumulative minutes spent over the sprint. Use the left and right arrow keys to read values." preserveAspectRatio="xMidYMid meet"></svg>
+          <svg id="buChart" class="bu-chart" viewBox="0 0 900 360" role="img" tabindex="0" aria-label="Cumulative minutes spent over the sprint, split into planned and added mid-sprint. Use the left and right arrow keys to read values." preserveAspectRatio="xMidYMid meet"></svg>
           <div id="buTip" class="bu-tip" hidden></div>
         </div>
+        <div id="buLegend" class="bu-legend" hidden></div>
         <p id="buDesc" class="bu-desc" hidden></p>
         <div class="bu-actions">
           <div class="bu-seg" id="buSteps" role="group" aria-label="Resolution" hidden>
