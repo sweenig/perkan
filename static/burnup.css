@@ -49,3 +49,18 @@
 .bu-list a{color:#b78ef5}
 .bu-sub-h{margin:14px 0 4px;font-size:13px;color:#a0a4ad}
 .bu-nonwork{fill:rgba(128,128,128,.22);pointer-events:none}
+
+.bu-total-split{display:block;margin-top:2px;font-size:12px;color:#f5a45d}
+.bu-area-added{fill:url(#buHatch);stroke:none}
+.bu-hatch-bg{fill:#f5a45d;fill-opacity:.08}
+.bu-hatch-line{stroke:#f5a45d;stroke-width:2;stroke-opacity:.7}
+.bu-line-added{fill:none;stroke:#f5a45d;stroke-width:2;stroke-dasharray:5 3;stroke-linejoin:round;stroke-linecap:round}
+.bu-add-mark{fill:#f5a45d;stroke:#131320;stroke-width:1}
+.bu-endlabel-sub{fill:#b78ef5;font-weight:400}
+.bu-tip .bu-tip-key-added{border-top:2px dashed #f5a45d}
+.bu-legend{margin-top:8px;display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:#a0a4ad}
+.bu-legend-item{display:inline-flex;align-items:center;gap:6px}
+.bu-swatch{display:inline-block;width:18px;height:12px;border-radius:2px}
+.bu-swatch-planned{background:rgba(183,142,245,.3);border-top:2px solid #b78ef5}
+.bu-swatch-added{border-top:2px dashed #f5a45d;background:repeating-linear-gradient(-45deg,rgba(245,164,93,.7) 0 2px,rgba(245,164,93,.1) 2px 5px)}
+.bu-swatch-mark{color:#f5a45d;font-size:11px}
